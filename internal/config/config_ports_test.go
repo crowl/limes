@@ -43,6 +43,18 @@ func TestLoadValidatesExplicitUpstreamPortsAndIPv6(t *testing.T) {
 	}
 }
 
+func TestParseVersionDoesNotRequireConfigurationPath(t *testing.T) {
+	for _, flag := range []string{"-version", "--version"} {
+		options, err := parseWithGetenv([]string{flag}, io.Discard, func(string) string { return "" })
+		if err != nil {
+			t.Fatalf("parseWithGetenv(%q) error = %v", flag, err)
+		}
+		if !options.ShowVersion || options.Path != "" {
+			t.Fatalf("parseWithGetenv(%q) = %#v", flag, options)
+		}
+	}
+}
+
 func TestParseRejectsUnknownFlagsAndPositionalArguments(t *testing.T) {
 	for _, args := range [][]string{{"--unknown"}, {"config.json"}} {
 		_, err := Parse(args, io.Discard)

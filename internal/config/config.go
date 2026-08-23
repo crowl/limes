@@ -20,7 +20,8 @@ import (
 const MaxSize = 1 << 20
 
 type Options struct {
-	Path string
+	Path        string
+	ShowVersion bool
 }
 
 type File struct {
@@ -68,11 +69,15 @@ func parseWithGetenv(args []string, output io.Writer, getenv func(string) string
 	flags := flag.NewFlagSet("limes", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.StringVar(&cfg.Path, "config-path", "", "path to config.json (default: $XDG_CONFIG_HOME/limes/config.json or $HOME/.config/limes/config.json)")
+	flags.BoolVar(&cfg.ShowVersion, "version", false, "print version and exit")
 	if err := flags.Parse(args); err != nil {
 		return Options{}, err
 	}
 	if flags.NArg() != 0 {
 		return Options{}, fmt.Errorf("unexpected positional argument %q", flags.Arg(0))
+	}
+	if cfg.ShowVersion {
+		return cfg, nil
 	}
 	path, err := ResolvePath(cfg.Path, getenv)
 	if err != nil {

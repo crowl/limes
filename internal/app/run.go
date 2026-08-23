@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crowl/limes/internal/buildinfo"
 	"github.com/crowl/limes/internal/config"
 )
 
@@ -21,13 +22,17 @@ const (
 	requestReadTimeout = 5 * time.Minute
 )
 
-func Run(ctx context.Context, args []string, getenv func(string) string, logger *slog.Logger, flagOutput io.Writer) error {
-	return runWithBind(ctx, args, getenv, logger, flagOutput, bindProviders)
+func Run(ctx context.Context, args []string, getenv func(string) string, logger *slog.Logger, output, flagOutput io.Writer) error {
+	return runWithBind(ctx, args, getenv, logger, output, flagOutput, bindProviders)
 }
 
-func runWithBind(ctx context.Context, args []string, getenv func(string) string, logger *slog.Logger, flagOutput io.Writer, bind func([]provider) ([]runningProvider, error)) error {
+func runWithBind(ctx context.Context, args []string, getenv func(string) string, logger *slog.Logger, output, flagOutput io.Writer, bind func([]provider) ([]runningProvider, error)) error {
 	cfg, err := config.Parse(args, flagOutput)
 	if err != nil {
+		return err
+	}
+	if cfg.ShowVersion {
+		_, err := fmt.Fprintln(output, buildinfo.String())
 		return err
 	}
 

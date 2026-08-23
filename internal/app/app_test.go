@@ -14,8 +14,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crowl/limes/internal/buildinfo"
 	"github.com/crowl/limes/internal/config"
 )
+
+func TestRunPrintsVersionWithoutLoadingConfiguration(t *testing.T) {
+	originalVersion, originalRevision := buildinfo.Version, buildinfo.Revision
+	buildinfo.Version, buildinfo.Revision = "v1.2.3", "a1b2c3d"
+	t.Cleanup(func() {
+		buildinfo.Version, buildinfo.Revision = originalVersion, originalRevision
+	})
+
+	var output strings.Builder
+	bindCalled := false
+	err := runWithBind(t.Context(), []string{"-version"}, func(string) string {
+		t.Fatal("environment was read for version output")
+		return ""
+	}, testLogger(), &output, io.Discard, func([]provider) ([]runningProvider, error) {
+		bindCalled = true
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindCalled {
+		t.Fatal("listeners were bound for version output")
+	}
+	if got, want := output.String(), "limes v1.2.3 (a1b2c3d)\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
 
 func TestRunValidatesAllBackendsBeforeBinding(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -32,7 +60,7 @@ func TestRunValidatesAllBackendsBeforeBinding(t *testing.T) {
 			return "credential"
 		}
 		return ""
-	}, testLogger(), io.Discard, func([]provider) ([]runningProvider, error) {
+	}, testLogger(), io.Discard, io.Discard, func([]provider) ([]runningProvider, error) {
 		bindCalled = true
 		t.Fatal("bind was called before invalid configuration was rejected")
 		return nil, nil

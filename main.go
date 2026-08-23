@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	if err := app.Run(context.Background(), os.Args[1:], os.Getenv, slog.Default(), os.Stderr); err != nil {
+	if err := app.Run(context.Background(), os.Args[1:], os.Getenv, slog.Default(), os.Stdout, os.Stderr); err != nil {
 		if config.IsHelp(err) {
 			return
 		}

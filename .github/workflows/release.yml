@@ -41,9 +41,11 @@ jobs:
       - name: Build and package release archives
         env:
           TAG: ${{ github.ref_name }}
+          REVISION: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
+          revision="${REVISION:0:7}"
           rm -rf dist build
           mkdir -p dist build
 
@@ -72,7 +74,8 @@ jobs:
             fi
 
             GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
-              go build -trimpath -ldflags "-s -w" \
+              go build -trimpath \
+              -ldflags "-s -w -X github.com/crowl/limes/internal/buildinfo.Version=${TAG} -X github.com/crowl/limes/internal/buildinfo.Revision=${revision}" \
               -o "$binary" .
 
             if [[ "$archive_type" == "tar.gz" ]]; then

@@ -18,6 +18,7 @@ Limes requires Go 1.27.0.
 
 ```sh
 go build -o limes .
+./limes -version
 mkdir -p ~/.config/limes
 cp config.example.json ~/.config/limes/config.json
 ./limes
