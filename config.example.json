@@ -1,0 +1,78 @@
+{
+  "listeners": [
+    {
+      "name": "openai",
+      "address": "0.0.0.0:8787",
+      "backends": [
+        { "type": "openai_subscription" },
+        {
+          "type": "http",
+          "upstream": "https://api.openai.com",
+          "routes": [
+            { "method": "POST", "path": "/v1/responses" },
+            { "method": "POST", "path": "/v1/responses/input_tokens" }
+          ],
+          "remove_headers": [
+            "Authorization",
+            "OpenAI-Organization",
+            "OpenAI-Project"
+          ],
+          "credential": {
+            "environment": "OPENAI_API_KEY",
+            "header": "Authorization",
+            "prefix": "Bearer "
+          }
+        }
+      ]
+    },
+    {
+      "name": "gemini",
+      "address": "0.0.0.0:8788",
+      "backends": [
+        {
+          "type": "http",
+          "upstream": "https://generativelanguage.googleapis.com",
+          "routes": [
+            { "method": "POST", "path": "/v1beta/interactions" },
+            {
+              "method": "POST",
+              "path": "/v1beta/models/{model}:generateContent"
+            },
+            {
+              "method": "POST",
+              "path": "/v1beta/models/{model}:streamGenerateContent"
+            },
+            { "method": "POST", "path": "/v1beta/models/{model}:countTokens" }
+          ],
+          "remove_headers": ["Authorization", "x-goog-api-key"],
+          "remove_query_parameters": ["key"],
+          "credential": {
+            "environment": "GEMINI_API_KEY",
+            "header": "x-goog-api-key",
+            "prefix": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "anthropic",
+      "address": "0.0.0.0:8789",
+      "backends": [
+        {
+          "type": "http",
+          "upstream": "https://api.anthropic.com",
+          "routes": [
+            { "method": "POST", "path": "/v1/messages" },
+            { "method": "POST", "path": "/v1/messages/count_tokens" }
+          ],
+          "remove_headers": ["Authorization", "x-api-key"],
+          "credential": {
+            "environment": "ANTHROPIC_API_KEY",
+            "header": "x-api-key",
+            "prefix": ""
+          }
+        }
+      ]
+    }
+  ]
+}
