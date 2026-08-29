@@ -144,7 +144,7 @@ func Load(path string) (File, error) {
 			if hasType {
 				_ = json.Unmarshal(typeValue, &typ)
 			}
-			if typ != "openai_subscription" {
+			if typ != "openai_subscription" && typ != "xai_subscription" {
 				for _, key := range []string{"upstream", "routes", "remove_headers", "remove_query_parameters", "credential"} {
 					allowed[key] = true
 				}
@@ -270,9 +270,9 @@ func validateFile(cfg *File) error {
 }
 
 func validateBackend(b *Backend) error {
-	if b.Type == "openai_subscription" {
+	if b.Type == "openai_subscription" || b.Type == "xai_subscription" {
 		if b.Upstream != "" || len(b.Routes) > 0 || len(b.RemoveHeaders) > 0 || len(b.RemoveQueryParameters) > 0 || b.Credential != nil {
-			return errors.New("openai_subscription does not accept additional fields")
+			return fmt.Errorf("%s does not accept additional fields", b.Type)
 		}
 		return nil
 	}

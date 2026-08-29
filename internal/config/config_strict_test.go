@@ -52,11 +52,12 @@ func TestLoadRejectsListenerAndBackendValidation(t *testing.T) {
 		{"empty backends", strings.Replace(valid, `"backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]`, `"backends":[]`, 1), "has no backends"},
 		{"missing type", strings.Replace(valid, `"type":"http",`, "", 1), "unknown backend type"},
 		{"unknown type", strings.Replace(valid, `"type":"http"`, `"type":"other"`, 1), "unknown backend type"},
-		{"subscription upstream", subscriptionWith(`"upstream":"https://x"`), "does not belong"},
-		{"subscription routes", subscriptionWith(`"routes":[]`), "does not belong"},
-		{"subscription headers", subscriptionWith(`"remove_headers":["X"]`), "does not belong"},
-		{"subscription query", subscriptionWith(`"remove_query_parameters":["x"]`), "does not belong"},
-		{"subscription credential", subscriptionWith(`"credential":{"environment":"X","header":"X"}`), "does not belong"},
+		{"subscription upstream", subscriptionWith("openai_subscription", `"upstream":"https://x"`), "does not belong"},
+		{"subscription routes", subscriptionWith("openai_subscription", `"routes":[]`), "does not belong"},
+		{"subscription headers", subscriptionWith("openai_subscription", `"remove_headers":["X"]`), "does not belong"},
+		{"subscription query", subscriptionWith("openai_subscription", `"remove_query_parameters":["x"]`), "does not belong"},
+		{"subscription credential", subscriptionWith("openai_subscription", `"credential":{"environment":"X","header":"X"}`), "does not belong"},
+		{"xAI subscription upstream", subscriptionWith("xai_subscription", `"upstream":"https://x"`), "does not belong"},
 		{"missing upstream", strings.Replace(valid, `"upstream":"https://example.test",`, "", 1), "upstream must be"},
 		{"missing routes", strings.Replace(valid, `"routes":[{"method":"POST","path":"/x"}],`, "", 1), "routes must not be empty"},
 		{"missing credential", strings.Replace(valid, `,"credential":{"environment":"KEY","header":"Authorization"}`, "", 1), "credential environment"},
@@ -135,6 +136,6 @@ func validConfigJSON() string {
 func validListener(name, address string) string {
 	return `{"name":"` + name + `","address":"` + address + `","backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}`
 }
-func subscriptionWith(field string) string {
-	return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"openai_subscription",` + field + `}]}]}`
+func subscriptionWith(typ, field string) string {
+	return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"` + typ + `",` + field + `}]}]}`
 }

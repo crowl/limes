@@ -99,6 +99,33 @@ func TestSelectProvidersPrefersAvailableSubscription(t *testing.T) {
 	}
 }
 
+func TestSelectProvidersPrefersAvailableXaiSubscription(t *testing.T) {
+	directory := t.TempDir()
+	entry := `{"key":"token","auth_mode":"oidc","user_id":"user","expires_at":"2100-01-01T00:00:00Z","refresh_token":"refresh","oidc_issuer":"https://auth.x.ai","oidc_client_id":"b1a00492-073a-47ea-816f-4c329264a828"}`
+	contents := `{"https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828":` + entry + `}`
+	if err := os.WriteFile(filepath.Join(directory, "auth.json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.File{Listeners: []config.Listener{{Name: "xai", Address: "127.0.0.1:0", Backends: []config.Backend{
+		{Type: "xai_subscription"}, httpBackend("KEY"),
+	}}}}
+	providers, err := selectProviders(settings, func(name string) string {
+		if name == "GROK_HOME" {
+			return directory
+		}
+		if name == "KEY" {
+			return "fallback"
+		}
+		return ""
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 1 || providers[0].authMode != "xai_subscription" || providers[0].name != "xai" {
+		t.Fatalf("selected providers = %#v", providers)
+	}
+}
+
 func TestSelectProvidersDoesNotEvaluateLaterBackendAfterSelection(t *testing.T) {
 	directory := t.TempDir()
 	contents := `{"tokens":{"access_token":"` + subscriptionTestJWT("account") + `"},"last_refresh":"` + time.Now().UTC().Format(time.RFC3339) + `"}`

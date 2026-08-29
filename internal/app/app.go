@@ -12,6 +12,7 @@ import (
 	"github.com/crowl/limes/internal/config"
 	"github.com/crowl/limes/internal/openai"
 	"github.com/crowl/limes/internal/proxy"
+	"github.com/crowl/limes/internal/xai"
 )
 
 type provider struct {
@@ -54,6 +55,12 @@ func selectProviders(cfg config.File, getenv func(string) string, logger *slog.L
 					return nil, err
 				} else if available {
 					chosen = &provider{name: listenerConfig.Name, address: listenerConfig.Address, authMode: "openai_subscription", handler: handler}
+				}
+			case "xai_subscription":
+				if handler, available, err := xai.Available(getenv); err != nil {
+					return nil, err
+				} else if available {
+					chosen = &provider{name: listenerConfig.Name, address: listenerConfig.Address, authMode: "xai_subscription", handler: handler}
 				}
 			}
 			if chosen != nil {
