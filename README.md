@@ -93,13 +93,23 @@ Configure the sandboxed client with the listener URL as its provider base URL an
 
 Limes selects the first available backend for each listener at startup.
 
-An `http` backend is available when its credential environment variable is nonempty. The built-in `openai_subscription` backend is available when Limes finds valid local Codex or ChatGPT subscription credentials:
+An `http` backend is available when its credential environment variable is nonempty. The built-in subscription backends are available when Limes finds valid credentials from the corresponding official CLI login:
 
 ```json
 {
   "type": "openai_subscription"
 }
 ```
+
+`openai_subscription` uses local Codex or ChatGPT subscription credentials. `xai_subscription` uses the official Grok CLI login from `$GROK_HOME/auth.json` or `~/.grok/auth.json` and exposes `POST /v1/responses` through xAI's CLI proxy:
+
+```json
+{
+  "type": "xai_subscription"
+}
+```
+
+The xAI backend reads the request's required `model` field to select the upstream model. Run `grok login` before starting Limes if no Grok login exists.
 
 A listener is disabled when none of its backends are available. Startup fails if every listener is disabled. Selected backends do not change while Limes is running.
 

@@ -55,6 +55,26 @@
       ]
     },
     {
+      "name": "xai",
+      "address": "0.0.0.0:8790",
+      "backends": [
+        { "type": "xai_subscription" },
+        {
+          "type": "http",
+          "upstream": "https://api.x.ai",
+          "routes": [
+            { "method": "POST", "path": "/v1/responses" }
+          ],
+          "remove_headers": ["Authorization", "x-api-key"],
+          "credential": {
+            "environment": "XAI_API_KEY",
+            "header": "Authorization",
+            "prefix": "Bearer "
+          }
+        }
+      ]
+    },
+    {
       "name": "anthropic",
       "address": "0.0.0.0:8789",
       "backends": [
