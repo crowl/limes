@@ -27,23 +27,41 @@ func Run(ctx context.Context, args []string, getenv func(string) string, logger 
 }
 
 func runWithBind(ctx context.Context, args []string, getenv func(string) string, logger *slog.Logger, output, flagOutput io.Writer, bind func([]provider) ([]runningProvider, error)) error {
-	cfg, err := config.Parse(args, flagOutput)
+	options, err := config.Parse(args, flagOutput)
 	if err != nil {
 		return err
 	}
-	if cfg.ShowVersion {
+	if options.ShowVersion {
 		_, err := fmt.Fprintln(output, buildinfo.String())
 		return err
 	}
 
-	providers, err := configuredProviders(cfg, getenv, logger)
+	cfg, err := config.Load(options.Path)
 	if err != nil {
 		return err
 	}
+	providers := configureRuntimeProviders(cfg, getenv, logger)
+	available := availableProviders(providers)
+	if len(available) == 0 && cfg.Admin == nil {
+		return errors.New("no configured listener has an available backend")
+	}
 
-	running, err := bind(providers)
+	running, err := bind(available)
 	if err != nil {
 		return err
+	}
+	if cfg.Admin != nil {
+		panel, err := newAdminPanel(cfg.Admin.Address, providers, logger)
+		if err != nil {
+			closeListeners(running)
+			return err
+		}
+		admin, err := bindAdmin(panel)
+		if err != nil {
+			closeListeners(running)
+			return err
+		}
+		running = append(running, admin)
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -55,16 +73,20 @@ func runWithBind(ctx context.Context, args []string, getenv func(string) string,
 func serveRunning(ctx context.Context, running []runningProvider, logger *slog.Logger) error {
 	serveErrors := make(chan error, len(running))
 	for _, instance := range running {
-		logger.Info("provider proxy listening",
-			"provider", instance.provider.name,
-			"address", instance.listener.Addr().String(),
-			"auth", instance.provider.authMode,
-		)
-		if !isLoopbackAddress(instance.provider.address) {
-			logger.Warn("listener is reachable beyond loopback; Limes does not authenticate incoming clients, so do not expose it to untrusted networks",
+		if instance.provider.authMode == "admin" {
+			logger.Info("admin panel listening", "address", instance.listener.Addr().String())
+		} else {
+			logger.Info("provider proxy listening",
 				"provider", instance.provider.name,
-				"address", instance.provider.address,
+				"address", instance.listener.Addr().String(),
+				"auth", instance.provider.authMode,
 			)
+			if !isLoopbackAddress(instance.provider.address) {
+				logger.Warn("listener is reachable beyond loopback; Limes does not authenticate incoming clients, so do not expose it to untrusted networks",
+					"provider", instance.provider.name,
+					"address", instance.provider.address,
+				)
+			}
 		}
 
 		go func(instance runningProvider) {
@@ -99,6 +121,9 @@ func shutdownServers(running []runningProvider, timeout time.Duration, logger *s
 				}
 				shutdownErrors <- shutdownErr
 				return
+			}
+			if instance.provider.backends != nil {
+				instance.provider.backends.setListening(false)
 			}
 			shutdownErrors <- nil
 		}(instance)

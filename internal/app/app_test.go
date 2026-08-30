@@ -57,6 +57,35 @@ func TestRunPrintsVersionWithoutLoadingConfiguration(t *testing.T) {
 	}
 }
 
+func TestRunKeepsAdminAvailableWhenAllBackendsAreUnavailable(t *testing.T) {
+	adminListener := mustListen(t)
+	adminAddress := adminListener.Addr().String()
+	if err := adminListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	contents := `{"admin":{"address":"` + adminAddress + `"},"listeners":[{"name":"unavailable","address":"127.0.0.1:8787","backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"MISSING","header":"Authorization"}}]}]}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	bindCalled := false
+	err := runWithBind(ctx, []string{"--config-path", path}, func(string) string { return "" }, testLogger(), io.Discard, io.Discard, func(providers []provider) ([]runningProvider, error) {
+		bindCalled = true
+		if len(providers) != 0 {
+			t.Fatalf("bound providers = %#v", providers)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bindCalled {
+		t.Fatal("proxy binding was not attempted")
+	}
+}
+
 func TestRunValidatesAllBackendsBeforeBinding(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	contents := `{"listeners":[` +
@@ -138,24 +167,26 @@ func TestSelectProvidersPrefersAvailableXaiSubscription(t *testing.T) {
 	}
 }
 
-func TestSelectProvidersDoesNotEvaluateLaterBackendAfterSelection(t *testing.T) {
+func TestSelectProvidersEvaluatesLaterBackendAfterSelection(t *testing.T) {
 	directory := t.TempDir()
 	contents := `{"tokens":{"access_token":"` + subscriptionTestJWT("account") + `"},"last_refresh":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
 	if err := os.WriteFile(filepath.Join(directory, "auth.json"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	settings := config.File{Listeners: []config.Listener{{Name: "one", Address: "127.0.0.1:0", Backends: []config.Backend{{Type: "openai_subscription"}, httpBackend("LATER")}}}}
+	laterEvaluated := false
 	providers, err := selectProviders(settings, func(name string) string {
 		if name == "CODEX_HOME" {
 			return directory
 		}
 		if name == "LATER" {
-			t.Fatal("later backend availability was evaluated")
+			laterEvaluated = true
+			return "fallback"
 		}
 		return ""
 	}, testLogger())
-	if err != nil || len(providers) != 1 || providers[0].authMode != "openai_subscription" {
-		t.Fatalf("selectProviders() = %#v, %v", providers, err)
+	if err != nil || len(providers) != 1 || providers[0].authMode != "openai_subscription" || !laterEvaluated {
+		t.Fatalf("selectProviders() = %#v, %v, later evaluated = %v", providers, err, laterEvaluated)
 	}
 }
 
