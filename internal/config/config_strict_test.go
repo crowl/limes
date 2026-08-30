@@ -83,6 +83,41 @@ func TestLoadRejectsListenerAndBackendValidation(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsLoopbackAdmin(t *testing.T) {
+	body := strings.Replace(validConfigJSON(), `{"listeners"`, `{"admin":{"address":"127.0.0.1:8799"},"listeners"`, 1)
+	file, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Admin == nil || file.Admin.Address != "127.0.0.1:8799" {
+		t.Fatalf("admin = %#v", file.Admin)
+	}
+}
+
+func TestLoadRejectsInvalidAdmin(t *testing.T) {
+	for name, address := range map[string]string{
+		"empty":            "",
+		"malformed":        "bad",
+		"zero port":        "127.0.0.1:0",
+		"unspecified IPv4": "0.0.0.0:8799",
+		"public":           "192.0.2.1:8799",
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := strings.Replace(validConfigJSON(), `{"listeners"`, `{"admin":{"address":"`+address+`"},"listeners"`, 1)
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Fatal("Load() accepted invalid admin address")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsAdminAndProxyAddressCollision(t *testing.T) {
+	body := strings.Replace(validConfigJSON(), `{"listeners"`, `{"admin":{"address":"127.0.0.1:1"},"listeners"`, 1)
+	if _, err := Load(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "duplicate listener address") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadAcceptsHTTPSBackend(t *testing.T) {
 	body := `{"listeners":[{"name":"github","address":"127.0.0.1:8791","backends":[{"type":"https","upstreams":["https://github.com","https://api.github.com"],"routes":[{"method":"GET","path":"/{path...}"}],"remove_headers":["Authorization"],"credential":{"environment":"GITHUB_PAT","header":"Authorization","basic_username":"x-access-token"}}]}]}`
 	file, err := Load(writeConfig(t, body))

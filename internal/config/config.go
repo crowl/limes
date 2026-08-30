@@ -25,7 +25,12 @@ type Options struct {
 }
 
 type File struct {
+	Admin     *Admin     `json:"admin,omitempty"`
 	Listeners []Listener `json:"listeners"`
+}
+
+type Admin struct {
+	Address string `json:"address"`
 }
 
 type Listener struct {
@@ -247,6 +252,12 @@ func validateFile(cfg *File) error {
 	}
 	names := map[string]bool{}
 	addresses := map[string]bool{}
+	if cfg.Admin != nil {
+		if err := validateAdmin(cfg.Admin); err != nil {
+			return err
+		}
+		addresses[normalizedAddress(cfg.Admin.Address)] = true
+	}
 	for i := range cfg.Listeners {
 		l := &cfg.Listeners[i]
 		if l.Name == "" || names[l.Name] {
@@ -264,10 +275,11 @@ func validateFile(cfg *File) error {
 		if err != nil || portNumber == 0 {
 			return fmt.Errorf("listener %q address has invalid port %q", l.Name, port)
 		}
-		if addresses[l.Address] {
+		addressKey := normalizedAddress(l.Address)
+		if addresses[addressKey] {
 			return fmt.Errorf("duplicate listener address %q", l.Address)
 		}
-		addresses[l.Address] = true
+		addresses[addressKey] = true
 		if len(l.Backends) == 0 {
 			return fmt.Errorf("listener %q has no backends", l.Name)
 		}
@@ -278,6 +290,40 @@ func validateFile(cfg *File) error {
 		}
 	}
 	return nil
+}
+
+func validateAdmin(admin *Admin) error {
+	if admin.Address == "" {
+		return errors.New("admin address is required")
+	}
+	host, port, err := net.SplitHostPort(admin.Address)
+	if err != nil {
+		return fmt.Errorf("admin address: %w", err)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return fmt.Errorf("admin address has invalid port %q", port)
+	}
+	if !strings.EqualFold(host, "localhost") {
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return errors.New("admin address must use localhost or a loopback IP")
+		}
+	}
+	return nil
+}
+
+func normalizedAddress(address string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address
+	}
+	if strings.EqualFold(host, "localhost") {
+		host = "localhost"
+	} else if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func validateBackend(b *Backend) error {
