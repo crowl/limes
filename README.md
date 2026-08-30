@@ -63,8 +63,38 @@ from a release and automatic startup at login.
 
 ## Configuration
 
+A configuration may enable the self-contained admin panel on a loopback address:
+
+```json
+{
+  "admin": {
+    "address": "127.0.0.1:8799"
+  },
+  "listeners": [
+    "..."
+  ]
+}
+```
+
+Open `http://127.0.0.1:8799/` to inspect listeners and switch between their
+available backends without restarting Limes. Switching affects new requests;
+in-flight requests finish on the backend that accepted them. The selection is
+held only in memory, so restarting Limes restores the first available backend in
+configuration order.
+
+The admin panel is disabled when `admin` is omitted. Its address must use
+`localhost` or a loopback IP and cannot match a proxy listener address. It shows
+sanitized availability information and never displays credentials. Backend
+availability is evaluated during startup; restart Limes after adding or fixing a
+credential.
+
+If a listener has no available backend, it is not bound but remains visible in
+the admin panel. Limes can run with only the admin panel when every backend is
+unavailable. Without an enabled admin panel, Limes exits when no backend is
+available.
+
 A configuration defines one or more listeners and an ordered list of backend
-candidates for each listener:
+candidates for each listener. The first available candidate is active at startup:
 
 ```json
 {
