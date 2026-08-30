@@ -15,6 +15,29 @@ import (
 	"time"
 )
 
+func TestAvailableDistinguishesMissingAndMalformedCredentials(t *testing.T) {
+	missing := t.TempDir()
+	if handler, available, err := Available(func(name string) string {
+		if name == "GROK_HOME" {
+			return missing
+		}
+		return ""
+	}); err != nil || available || handler != nil {
+		t.Fatalf("missing Available() = %v, %v, %v", handler, available, err)
+	}
+
+	malformed := t.TempDir()
+	writeRawAuth(t, filepath.Join(malformed, "auth.json"), `not json`)
+	if _, available, err := Available(func(name string) string {
+		if name == "GROK_HOME" {
+			return malformed
+		}
+		return ""
+	}); err == nil || available {
+		t.Fatalf("malformed Available() = available %v, error %v", available, err)
+	}
+}
+
 func TestFindSubscriptionCredentialsUsesGrokHome(t *testing.T) {
 	grokHome := t.TempDir()
 	home := t.TempDir()
@@ -56,7 +79,7 @@ func TestFindSubscriptionCredentialsRejectsAPIKeyAndInvalidEntries(t *testing.T)
 				}
 				return ""
 			}, time.Now())
-			if !errors.Is(err, errNoSubscriptionCredentials) {
+			if !errors.Is(err, errNoSubscriptionCredentials) && !strings.Contains(err.Error(), "subscription credentials") {
 				t.Fatalf("error = %v", err)
 			}
 		})

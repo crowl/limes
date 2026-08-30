@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -60,15 +61,23 @@ func findSubscriptionCredentials(getenv func(string) string) (string, *authFile,
 
 func findSubscriptionCredentialsAt(getenv func(string) string, now time.Time) (string, *authFile, error) {
 	store := newAuthStore()
+	var candidateErr error
 	for _, path := range authFileCandidates(getenv) {
 		file, err := store.read(path)
 		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				candidateErr = err
+			}
 			continue
 		}
 		if err := validateAuthFile(file, now); err != nil {
+			candidateErr = err
 			continue
 		}
 		return path, file, nil
+	}
+	if candidateErr != nil {
+		return "", nil, fmt.Errorf("load subscription credentials: %w", candidateErr)
 	}
 	return "", nil, errNoSubscriptionCredentials
 }
@@ -343,8 +352,11 @@ func removeCredentialHeaders(headers http.Header) {
 // subscription credentials can be discovered.
 func Available(getenv func(string) string) (http.Handler, bool, error) {
 	path, file, err := findSubscriptionCredentials(getenv)
-	if err != nil {
+	if errors.Is(err, errNoSubscriptionCredentials) {
 		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
 	}
 	handler, err := newSubscriptionProxy(path, file)
 	return handler, err == nil, err

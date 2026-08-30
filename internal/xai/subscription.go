@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -65,11 +66,14 @@ func findSubscriptionCredentialsAt(getenv func(string) string, now time.Time) (s
 		return "", nil, errNoSubscriptionCredentials
 	}
 	file, err := newAuthStore().read(path)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		return "", nil, errNoSubscriptionCredentials
 	}
+	if err != nil {
+		return "", nil, fmt.Errorf("load subscription credentials: %w", err)
+	}
 	if err := validateAuthFile(file, now); err != nil {
-		return "", nil, errNoSubscriptionCredentials
+		return "", nil, fmt.Errorf("validate subscription credentials: %w", err)
 	}
 	return path, file, nil
 }
@@ -372,8 +376,11 @@ func grokUserAgent() string {
 // Grok CLI credentials can be discovered.
 func Available(getenv func(string) string) (http.Handler, bool, error) {
 	path, file, err := findSubscriptionCredentials(getenv)
-	if err != nil {
+	if errors.Is(err, errNoSubscriptionCredentials) {
 		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
 	}
 	handler, err := newSubscriptionProxy(path, file)
 	return handler, err == nil, err

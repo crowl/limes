@@ -8,6 +8,31 @@ import (
 	"time"
 )
 
+func TestAvailableDistinguishesMissingAndMalformedCredentials(t *testing.T) {
+	missing := t.TempDir()
+	if handler, available, err := Available(func(name string) string {
+		if name == "CODEX_HOME" {
+			return missing
+		}
+		return ""
+	}); err != nil || available || handler != nil {
+		t.Fatalf("missing Available() = %v, %v, %v", handler, available, err)
+	}
+
+	malformed := t.TempDir()
+	if err := os.WriteFile(filepath.Join(malformed, "auth.json"), []byte(`not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, available, err := Available(func(name string) string {
+		if name == "CODEX_HOME" {
+			return malformed
+		}
+		return ""
+	}); err == nil || available {
+		t.Fatalf("malformed Available() = available %v, error %v", available, err)
+	}
+}
+
 func TestFindSubscriptionCredentialsUsesFirstValidCandidate(t *testing.T) {
 	root := t.TempDir()
 	codex := filepath.Join(root, "codex")
