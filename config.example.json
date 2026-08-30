@@ -93,6 +93,34 @@
           }
         }
       ]
+    },
+    {
+      "name": "github",
+      "address": "0.0.0.0:8791",
+      "backends": [
+        {
+          "type": "https",
+          "upstreams": [
+            "https://github.com",
+            "https://api.github.com",
+            "https://uploads.github.com"
+          ],
+          "routes": [
+            { "method": "GET", "path": "/{path...}" },
+            { "method": "HEAD", "path": "/{path...}" },
+            { "method": "POST", "path": "/{path...}" },
+            { "method": "PUT", "path": "/{path...}" },
+            { "method": "PATCH", "path": "/{path...}" },
+            { "method": "DELETE", "path": "/{path...}" }
+          ],
+          "remove_headers": ["Authorization"],
+          "credential": {
+            "environment": "GITHUB_PAT",
+            "header": "Authorization",
+            "basic_username": "x-access-token"
+          }
+        }
+      ]
     }
   ]
 }

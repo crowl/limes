@@ -63,6 +63,8 @@ func TestLoadRejectsListenerAndBackendValidation(t *testing.T) {
 		{"missing credential", strings.Replace(valid, `,"credential":{"environment":"KEY","header":"Authorization"}`, "", 1), "credential environment"},
 		{"invalid environment", strings.Replace(valid, `"environment":"KEY"`, `"environment":"BAD-NAME"`, 1), "credential environment"},
 		{"invalid header", strings.Replace(valid, `"header":"Authorization"`, `"header":"bad header"`, 1), "credential environment"},
+		{"basic username colon", strings.Replace(valid, `"header":"Authorization"`, `"header":"Authorization","basic_username":"bad:name"`, 1), "basic_username"},
+		{"basic and prefix", strings.Replace(valid, `"header":"Authorization"`, `"header":"Authorization","basic_username":"user","prefix":"Bearer "`, 1), "mutually exclusive"},
 		{"empty query name", strings.Replace(valid, `"credential"`, `"remove_query_parameters":[""],"credential"`, 1), "query parameter"},
 		{"duplicate query name", strings.Replace(valid, `"credential"`, `"remove_query_parameters":["x","x"],"credential"`, 1), "query parameter"},
 		{"duplicate headers", strings.Replace(valid, `"credential"`, `"remove_headers":["X-Test","x-test"],"credential"`, 1), "duplicate header"},
@@ -76,6 +78,37 @@ func TestLoadRejectsListenerAndBackendValidation(t *testing.T) {
 			_, err := Load(writeConfig(t, testCase.body))
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("Load() error = %v, want containing %q", err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsHTTPSBackend(t *testing.T) {
+	body := `{"listeners":[{"name":"github","address":"127.0.0.1:8791","backends":[{"type":"https","upstreams":["https://github.com","https://api.github.com"],"routes":[{"method":"GET","path":"/{path...}"}],"remove_headers":["Authorization"],"credential":{"environment":"GITHUB_PAT","header":"Authorization","basic_username":"x-access-token"}}]}]}`
+	file, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := file.Listeners[0].Backends[0]
+	if backend.Type != "https" || len(backend.Upstreams) != 2 || !backend.Routes[0].Pattern.Matches("/owner/repository") {
+		t.Fatalf("backend = %#v", backend)
+	}
+}
+
+func TestLoadRejectsInvalidHTTPSBackend(t *testing.T) {
+	valid := `{"listeners":[{"name":"github","address":"127.0.0.1:8791","backends":[{"type":"https","upstreams":["https://github.com"],"routes":[{"method":"GET","path":"/{path...}"}],"credential":{"environment":"GITHUB_PAT","header":"Authorization","prefix":"Bearer "}}]}]}`
+	for name, body := range map[string]string{
+		"singular upstream": strings.Replace(valid, `"upstreams":["https://github.com"]`, `"upstream":"https://github.com"`, 1),
+		"empty upstreams":   strings.Replace(valid, `"https://github.com"`, "", 1),
+		"http upstream":     strings.Replace(valid, "https://github.com", "http://github.com", 1),
+		"upstream path":     strings.Replace(valid, "https://github.com", "https://github.com/api", 1),
+		"non-443 port":      strings.Replace(valid, "https://github.com", "https://github.com:8443", 1),
+		"IP upstream":       strings.Replace(valid, "https://github.com", "https://127.0.0.1", 1),
+		"duplicate":         strings.Replace(valid, `"https://github.com"`, `"https://github.com","https://github.com:443"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Fatal("Load() succeeded")
 			}
 		})
 	}

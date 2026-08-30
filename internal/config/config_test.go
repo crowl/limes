@@ -102,6 +102,15 @@ func TestCompileRouteMatchesExactAndPlaceholder(t *testing.T) {
 			t.Errorf("Matches(%q) incorrect", path)
 		}
 	}
+	multi, err := CompileRoute("/{path...}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{"/owner/repository/git-upload-pack": true, "/graphql": true, "/": false} {
+		if multi.Matches(path) != want {
+			t.Errorf("multi-segment Matches(%q) = %v, want %v", path, multi.Matches(path), want)
+		}
+	}
 }
 
 func TestExampleConfiguration(t *testing.T) {

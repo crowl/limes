@@ -37,6 +37,7 @@ type Listener struct {
 type Backend struct {
 	Type                  string      `json:"type"`
 	Upstream              string      `json:"upstream,omitempty"`
+	Upstreams             []string    `json:"upstreams,omitempty"`
 	Routes                []Route     `json:"routes,omitempty"`
 	RemoveHeaders         []string    `json:"remove_headers,omitempty"`
 	RemoveQueryParameters []string    `json:"remove_query_parameters,omitempty"`
@@ -50,14 +51,16 @@ type Route struct {
 }
 
 type Credential struct {
-	Environment string `json:"environment"`
-	Header      string `json:"header"`
-	Prefix      string `json:"prefix"`
+	Environment   string `json:"environment"`
+	Header        string `json:"header"`
+	Prefix        string `json:"prefix"`
+	BasicUsername string `json:"basic_username,omitempty"`
 }
 
 type Pattern struct {
 	prefix, suffix string
 	placeholder    bool
+	multiSegment   bool
 }
 
 func Parse(args []string, output io.Writer) (Options, error) {
@@ -144,8 +147,16 @@ func Load(path string) (File, error) {
 			if hasType {
 				_ = json.Unmarshal(typeValue, &typ)
 			}
-			if typ != "openai_subscription" && typ != "xai_subscription" {
+			if typ == "http" {
 				for _, key := range []string{"upstream", "routes", "remove_headers", "remove_query_parameters", "credential"} {
+					allowed[key] = true
+				}
+			} else if typ == "https" {
+				for _, key := range []string{"upstreams", "routes", "remove_headers", "remove_query_parameters", "credential"} {
+					allowed[key] = true
+				}
+			} else if typ != "openai_subscription" && typ != "xai_subscription" {
+				for _, key := range []string{"upstream", "upstreams", "routes", "remove_headers", "remove_query_parameters", "credential"} {
 					allowed[key] = true
 				}
 			}
@@ -271,23 +282,36 @@ func validateFile(cfg *File) error {
 
 func validateBackend(b *Backend) error {
 	if b.Type == "openai_subscription" || b.Type == "xai_subscription" {
-		if b.Upstream != "" || len(b.Routes) > 0 || len(b.RemoveHeaders) > 0 || len(b.RemoveQueryParameters) > 0 || b.Credential != nil {
+		if b.Upstream != "" || len(b.Upstreams) > 0 || len(b.Routes) > 0 || len(b.RemoveHeaders) > 0 || len(b.RemoveQueryParameters) > 0 || b.Credential != nil {
 			return fmt.Errorf("%s does not accept additional fields", b.Type)
 		}
 		return nil
 	}
-	if b.Type != "http" {
+	if b.Type != "http" && b.Type != "https" {
 		return fmt.Errorf("unknown backend type %q", b.Type)
 	}
-	u, err := url.Parse(b.Upstream)
-	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return errors.New("upstream must be an absolute http or https URL without userinfo, query, or fragment")
-	}
-	if hasExplicitPort(u) {
-		port := u.Port()
-		portNumber, portErr := strconv.ParseUint(port, 10, 16)
-		if port == "" || portErr != nil || portNumber == 0 {
-			return fmt.Errorf("upstream has invalid explicit port %q", port)
+	if b.Type == "http" {
+		if err := validateUpstream(b.Upstream, false); err != nil {
+			return err
+		}
+	} else {
+		if len(b.Upstreams) == 0 {
+			return errors.New("upstreams must not be empty")
+		}
+		seen := make(map[string]bool)
+		for _, upstream := range b.Upstreams {
+			if err := validateUpstream(upstream, true); err != nil {
+				return err
+			}
+			u, _ := url.Parse(upstream)
+			authority := strings.ToLower(u.Host)
+			if u.Port() == "" {
+				authority = net.JoinHostPort(strings.ToLower(u.Hostname()), "443")
+			}
+			if seen[authority] {
+				return fmt.Errorf("duplicate upstream authority %q", authority)
+			}
+			seen[authority] = true
 		}
 	}
 	if len(b.Routes) == 0 {
@@ -332,6 +356,51 @@ func validateBackend(b *Backend) error {
 	if b.Credential == nil || !envName.MatchString(b.Credential.Environment) || !tokenName.MatchString(b.Credential.Header) {
 		return errors.New("credential environment and header are required and must be valid")
 	}
+	if b.Credential.BasicUsername != "" {
+		if b.Credential.Prefix != "" {
+			return errors.New("credential prefix and basic_username are mutually exclusive")
+		}
+		if strings.ContainsAny(b.Credential.BasicUsername, ":\r\n") {
+			return errors.New("credential basic_username must not contain a colon or line break")
+		}
+	}
+	return nil
+}
+
+func validateUpstream(value string, httpsOnly bool) error {
+	u, err := url.Parse(value)
+	if err != nil {
+		if httpsOnly {
+			return errors.New("upstreams must contain absolute https URLs without userinfo, query, or fragment")
+		}
+		return errors.New("upstream must be an absolute http or https URL without userinfo, query, or fragment")
+	}
+	validScheme := u.Scheme == "http" || u.Scheme == "https"
+	if httpsOnly {
+		validScheme = u.Scheme == "https"
+	}
+	if u.Scheme == "" || u.Host == "" || u.Hostname() == "" || !validScheme || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		if httpsOnly {
+			return errors.New("upstreams must contain absolute https URLs without userinfo, query, or fragment")
+		}
+		return errors.New("upstream must be an absolute http or https URL without userinfo, query, or fragment")
+	}
+	if httpsOnly && u.Path != "" && u.Path != "/" {
+		return errors.New("HTTPS upstreams must not contain paths")
+	}
+	if httpsOnly && net.ParseIP(u.Hostname()) != nil {
+		return errors.New("HTTPS upstreams must use DNS hostnames")
+	}
+	if hasExplicitPort(u) {
+		port := u.Port()
+		portNumber, portErr := strconv.ParseUint(port, 10, 16)
+		if port == "" || portErr != nil || portNumber == 0 {
+			return fmt.Errorf("upstream has invalid explicit port %q", port)
+		}
+		if httpsOnly && port != "443" {
+			return fmt.Errorf("HTTPS upstream explicit port must be 443, got %q", port)
+		}
+	}
 	return nil
 }
 
@@ -357,10 +426,14 @@ func CompileRoute(path string) (Pattern, error) {
 		return Pattern{}, fmt.Errorf("malformed route pattern %q", path)
 	}
 	name := path[first+1 : last]
+	multiSegment := strings.HasSuffix(name, "...")
+	if multiSegment {
+		name = strings.TrimSuffix(name, "...")
+	}
 	if !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`).MatchString(name) {
 		return Pattern{}, fmt.Errorf("invalid placeholder in %q", path)
 	}
-	return Pattern{prefix: path[:first], suffix: path[last+1:], placeholder: true}, nil
+	return Pattern{prefix: path[:first], suffix: path[last+1:], placeholder: true, multiSegment: multiSegment}, nil
 }
 
 func (p Pattern) Matches(path string) bool {
@@ -371,7 +444,7 @@ func (p Pattern) Matches(path string) bool {
 		return false
 	}
 	middle := path[len(p.prefix) : len(path)-len(p.suffix)]
-	return middle != "" && !strings.Contains(middle, "/")
+	return middle != "" && (p.multiSegment || !strings.Contains(middle, "/"))
 }
 
 func asciiUpper(value string) string {

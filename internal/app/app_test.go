@@ -18,6 +18,18 @@ import (
 	"github.com/crowl/limes/internal/config"
 )
 
+func TestCredentialValueSupportsPrefixAndBasicAuthentication(t *testing.T) {
+	prefixed := credentialValue(&config.Credential{Prefix: "Bearer "}, "secret")
+	if prefixed != "Bearer secret" {
+		t.Fatalf("prefixed credential = %q", prefixed)
+	}
+	basic := credentialValue(&config.Credential{BasicUsername: "x-access-token"}, "secret")
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:secret"))
+	if basic != want {
+		t.Fatalf("basic credential = %q, want %q", basic, want)
+	}
+}
+
 func TestRunPrintsVersionWithoutLoadingConfiguration(t *testing.T) {
 	originalVersion, originalRevision := buildinfo.Version, buildinfo.Revision
 	buildinfo.Version, buildinfo.Revision = "v1.2.3", "a1b2c3d"
