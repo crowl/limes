@@ -77,10 +77,15 @@ A configuration may enable the self-contained admin panel on a loopback address:
 ```
 
 Open `http://127.0.0.1:8799/` to inspect listeners and switch between their
-available backends without restarting Limes. Switching affects new requests;
-in-flight requests finish on the backend that accepted them. The selection is
-held only in memory, so restarting Limes restores the first available backend in
-configuration order.
+available backends without restarting Limes. Open
+`http://127.0.0.1:8799/requests` to view the request log. Switching affects new
+requests; in-flight requests finish on the backend that accepted them. The
+selection is held only in memory, so restarting Limes restores the first
+available backend in configuration order. The panel keeps the latest 200
+completed requests in memory and shows their listener, backend, method, path,
+status, and duration. Request bodies, headers, query parameters, credentials,
+and client addresses are not retained. The request log is cleared when Limes
+restarts.
 
 The admin panel is disabled when `admin` is omitted. Its address must use
 `localhost` or a loopback IP and cannot match a proxy listener address. It shows

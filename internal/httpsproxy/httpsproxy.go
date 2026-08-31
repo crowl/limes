@@ -24,6 +24,9 @@ const (
 // Route decides whether a method and URL path are allowed.
 type Route func(method, path string) bool
 
+// ObserveRequest receives completed intercepted requests. It must return quickly.
+type ObserveRequest func(method, path string, status int, started time.Time)
+
 // Backend contains the already-validated HTTPS backend settings.
 type Backend struct {
 	Upstreams             map[string]*url.URL
@@ -33,6 +36,7 @@ type Backend struct {
 	CredentialHeader      string
 	CredentialValue       string
 	Authority             *ca.Authority
+	Observe               ObserveRequest
 }
 
 // New returns a handler for an explicit HTTPS proxy.
@@ -107,53 +111,65 @@ func newHandler(backend Backend, transport http.RoundTripper) http.Handler {
 
 func serveTunnel(ctx context.Context, connection net.Conn, authority string, upstream *url.URL, backend Backend, transport http.RoundTripper) {
 	reader := bufio.NewReader(connection)
-	for {
-		if err := connection.SetReadDeadline(time.Now().Add(requestReadTimeout)); err != nil {
-			return
-		}
-		request, err := http.ReadRequest(reader)
-		if err != nil {
-			return
-		}
-		request = request.WithContext(ctx)
-		request.RequestURI = ""
-		request.Close = true
-
-		requestAuthority, err := requestHost(request)
-		if err != nil || requestAuthority != authority {
-			writeError(connection, http.StatusMisdirectedRequest, "request host does not match CONNECT authority")
-			return
-		}
-		if !backend.Allowed(request.Method, request.URL.Path) {
-			writeError(connection, http.StatusForbidden, "endpoint not allowed")
-			return
-		}
-		request.URL.Scheme = upstream.Scheme
-		request.URL.Host = upstream.Host
-		request.Host = upstream.Host
-		for _, header := range backend.RemoveHeaders {
-			request.Header.Del(header)
-		}
-		request.Header.Del(backend.CredentialHeader)
-		query := request.URL.Query()
-		for _, name := range backend.RemoveQueryParameters {
-			query.Del(name)
-		}
-		request.URL.RawQuery = query.Encode()
-		request.Header.Set(backend.CredentialHeader, backend.CredentialValue)
-
-		response, err := transport.RoundTrip(request)
-		if err != nil {
-			writeError(connection, http.StatusBadGateway, "upstream request failed")
-			return
-		}
-		response.Close = true
-		if err := response.Write(connection); err != nil {
-			response.Body.Close()
-			return
-		}
-		response.Body.Close()
+	if err := connection.SetReadDeadline(time.Now().Add(requestReadTimeout)); err != nil {
 		return
+	}
+	request, err := http.ReadRequest(reader)
+	if err != nil {
+		return
+	}
+	request = request.WithContext(ctx)
+	request.RequestURI = ""
+	request.Close = true
+	started := time.Now()
+
+	requestAuthority, err := requestHost(request)
+	if err != nil || requestAuthority != authority {
+		writeError(connection, http.StatusMisdirectedRequest, "request host does not match CONNECT authority")
+		observe(backend, request.Method, request.URL.Path, http.StatusMisdirectedRequest, started)
+		return
+	}
+	status := http.StatusBadGateway
+	if !backend.Allowed(request.Method, request.URL.Path) {
+		status = http.StatusForbidden
+		writeError(connection, status, "endpoint not allowed")
+		observe(backend, request.Method, request.URL.Path, status, started)
+		return
+	}
+	request.URL.Scheme = upstream.Scheme
+	request.URL.Host = upstream.Host
+	request.Host = upstream.Host
+	for _, header := range backend.RemoveHeaders {
+		request.Header.Del(header)
+	}
+	request.Header.Del(backend.CredentialHeader)
+	query := request.URL.Query()
+	for _, name := range backend.RemoveQueryParameters {
+		query.Del(name)
+	}
+	request.URL.RawQuery = query.Encode()
+	request.Header.Set(backend.CredentialHeader, backend.CredentialValue)
+
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		writeError(connection, http.StatusBadGateway, "upstream request failed")
+		observe(backend, request.Method, request.URL.Path, http.StatusBadGateway, started)
+		return
+	}
+	status = response.StatusCode
+	response.Close = true
+	if err := response.Write(connection); err != nil {
+		response.Body.Close()
+		observe(backend, request.Method, request.URL.Path, status, started)
+		return
+	}
+	response.Body.Close()
+	observe(backend, request.Method, request.URL.Path, status, started)
+}
+
+func observe(backend Backend, method, path string, status int, started time.Time) {
+	if backend.Observe != nil {
+		backend.Observe(method, path, status, started)
 	}
 }
 

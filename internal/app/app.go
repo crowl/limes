@@ -80,18 +80,25 @@ func selectProviders(cfg config.File, getenv func(string) string, logger *slog.L
 }
 
 func configureRuntimeProviders(cfg config.File, getenv func(string) string, logger *slog.Logger) []provider {
+	return configureRuntimeProvidersWithRequestLog(cfg, getenv, logger, nil)
+}
+
+func configureRuntimeProvidersWithRequestLog(cfg config.File, getenv func(string) string, logger *slog.Logger, requests *requestLog) []provider {
 	providers := make([]provider, 0, len(cfg.Listeners))
 	var authority *ca.Authority
 	for _, listenerConfig := range cfg.Listeners {
 		backends := make([]runtimeBackend, 0, len(listenerConfig.Backends))
 		for i, backendConfig := range listenerConfig.Backends {
-			backend, err := prepareBackend(i, backendConfig, getenv, &authority)
+			backend, err := prepareBackend(i, backendConfig, getenv, &authority, requests, listenerConfig.Name)
 			if err != nil {
 				logger.Warn("backend initialization failed",
 					"listener", listenerConfig.Name,
 					"backend", backend.typ,
 					"error", err,
 				)
+			}
+			if requests != nil && backend.handler != nil && backend.typ != "https" {
+				backend.handler = requests.wrap(listenerConfig.Name, backend.typ, backend.handler)
 			}
 			backends = append(backends, backend)
 		}
@@ -112,7 +119,7 @@ func configureRuntimeProviders(cfg config.File, getenv func(string) string, logg
 	return providers
 }
 
-func prepareBackend(index int, backend config.Backend, getenv func(string) string, authority **ca.Authority) (runtimeBackend, error) {
+func prepareBackend(index int, backend config.Backend, getenv func(string) string, authority **ca.Authority, requests *requestLog, listener string) (runtimeBackend, error) {
 	result := runtimeBackend{index: index, typ: backend.Type, target: backendTarget(backend)}
 	switch backend.Type {
 	case "http":
@@ -141,7 +148,7 @@ func prepareBackend(index int, backend config.Backend, getenv func(string) strin
 			}
 			*authority = loaded
 		}
-		handler, err := newHTTPSProxy(backend, key, *authority)
+		handler, err := newHTTPSProxy(backend, key, *authority, requests, listener)
 		if err != nil {
 			result.unavailable = "backend could not be initialized"
 			return result, err
@@ -334,7 +341,7 @@ func closeListeners(running []runningProvider) {
 	}
 }
 
-func newHTTPSProxy(backend config.Backend, key string, authority *ca.Authority) (http.Handler, error) {
+func newHTTPSProxy(backend config.Backend, key string, authority *ca.Authority, requests *requestLog, listener string) (http.Handler, error) {
 	upstreams := make(map[string]*url.URL, len(backend.Upstreams))
 	for _, value := range backend.Upstreams {
 		upstream, err := url.Parse(value)
@@ -353,7 +360,7 @@ func newHTTPSProxy(backend config.Backend, key string, authority *ca.Authority) 
 		}
 		return false
 	}
-	return httpsproxy.New(httpsproxy.Backend{
+	configured := httpsproxy.Backend{
 		Upstreams:             upstreams,
 		Allowed:               allowed,
 		RemoveHeaders:         backend.RemoveHeaders,
@@ -361,7 +368,13 @@ func newHTTPSProxy(backend config.Backend, key string, authority *ca.Authority) 
 		CredentialHeader:      backend.Credential.Header,
 		CredentialValue:       credentialValue(backend.Credential, key),
 		Authority:             authority,
-	}), nil
+	}
+	if requests != nil {
+		configured.Observe = func(method, path string, status int, started time.Time) {
+			requests.observe(listener, "https", method, path, status, started)
+		}
+	}
+	return httpsproxy.New(configured), nil
 }
 
 func newHTTPProxy(backend config.Backend, key string) (http.Handler, error) {

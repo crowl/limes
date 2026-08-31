@@ -89,7 +89,7 @@ func TestAdminPanelDisplaysStatusAndSwitchesBackend(t *testing.T) {
 	selector.setListening(true)
 	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{
 		name: "openai", address: "127.0.0.1:8787", backends: selector,
-	}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +103,19 @@ func TestAdminPanelDisplaysStatusAndSwitchesBackend(t *testing.T) {
 	}
 	if response.Header().Get("Content-Security-Policy") == "" || response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("security headers = %#v", response.Header())
+	}
+	for _, expected := range []string{
+		"color-scheme: light dark",
+		"@media (prefers-color-scheme: dark)",
+		"@media (max-width: 42rem)",
+		`href="/" aria-current="page"`,
+		`href="/requests"`,
+		`class="status active"`,
+		`class="status unavailable"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("admin index does not contain %q", expected)
+		}
 	}
 
 	form := url.Values{
@@ -124,6 +137,80 @@ func TestAdminPanelDisplaysStatusAndSwitchesBackend(t *testing.T) {
 	}
 }
 
+func TestAdminPanelDisplaysRequestLog(t *testing.T) {
+	selector := newBackendSelector([]runtimeBackend{{index: 0, typ: "http", handler: http.NotFoundHandler()}})
+	requests := newRequestLog()
+	requests.record(requestEntry{
+		CompletedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.Local),
+		Listener:    "one",
+		Backend:     "http",
+		Method:      http.MethodGet,
+		Path:        "/safe/path",
+		Status:      http.StatusNoContent,
+		Duration:    12 * time.Millisecond,
+	})
+	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, requests, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := httptest.NewRecorder()
+	panel.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8799/", nil))
+	if strings.Contains(response.Body.String(), "/safe/path") || strings.Contains(response.Body.String(), "Recent requests") {
+		t.Fatalf("listeners page contains request log: %q", response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	panel.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8799/requests", nil))
+	body := response.Body.String()
+	for _, expected := range []string{
+		"Recent requests",
+		`href="/requests" aria-current="page"`,
+		"one",
+		"http",
+		"GET",
+		"/safe/path",
+		"204",
+		"12 ms",
+		`.request-table th:nth-child(1) { width: 12rem; }`,
+		`.request-table time { white-space: nowrap; }`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("admin request log does not contain %q", expected)
+		}
+	}
+}
+
+func TestAdminPanelRequestRoutes(t *testing.T) {
+	selector := newBackendSelector([]runtimeBackend{{index: 0, typ: "http", handler: http.NotFoundHandler()}})
+	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, newRequestLog(), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/", "/requests"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			response := httptest.NewRecorder()
+			panel.ServeHTTP(response, httptest.NewRequest(method, "http://127.0.0.1:8799"+path, nil))
+			if response.Code != http.StatusOK {
+				t.Errorf("%s %s status = %d", method, path, response.Code)
+			}
+		}
+	}
+
+	response := httptest.NewRecorder()
+	panel.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8799/requests", nil))
+	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD" {
+		t.Errorf("POST /requests = %d, Allow %q", response.Code, response.Header().Get("Allow"))
+	}
+
+	response = httptest.NewRecorder()
+	panel.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8799/unknown", nil))
+	if response.Code != http.StatusNotFound {
+		t.Errorf("GET /unknown status = %d", response.Code)
+	}
+}
+
 func TestAdminPanelServesIPv6LoopbackAddress(t *testing.T) {
 	listener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
@@ -134,7 +221,7 @@ func TestAdminPanelServesIPv6LoopbackAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	selector := newBackendSelector([]runtimeBackend{{index: 0, typ: "http", handler: http.NotFoundHandler()}})
-	panel, err := newAdminPanel(address, []provider{{name: "one", backends: selector}}, testLogger())
+	panel, err := newAdminPanel(address, []provider{{name: "one", backends: selector}}, nil, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +251,7 @@ func TestAdminPanelServesIPv6LoopbackAddress(t *testing.T) {
 
 func TestAdminPanelAcceptsSameOriginWithRootPath(t *testing.T) {
 	selector := newBackendSelector([]runtimeBackend{{index: 0, typ: "http", handler: http.NotFoundHandler()}})
-	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, testLogger())
+	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, nil, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +264,7 @@ func TestAdminPanelAcceptsSameOriginWithRootPath(t *testing.T) {
 
 func TestAdminPanelAcceptsOpaqueOriginWithValidToken(t *testing.T) {
 	selector := newBackendSelector([]runtimeBackend{{index: 0, typ: "http", handler: http.NotFoundHandler()}})
-	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, testLogger())
+	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, nil, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +281,7 @@ func TestAdminPanelAcceptsOpaqueOriginWithValidToken(t *testing.T) {
 
 func TestAdminPanelRejectsInvalidHostOriginAndToken(t *testing.T) {
 	selector := newBackendSelector([]runtimeBackend{{index: 0, typ: "http", handler: http.NotFoundHandler()}})
-	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, testLogger())
+	panel, err := newAdminPanel("127.0.0.1:8799", []provider{{name: "one", backends: selector}}, nil, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
