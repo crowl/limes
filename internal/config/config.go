@@ -160,7 +160,7 @@ func Load(path string) (File, error) {
 				for _, key := range []string{"upstreams", "routes", "remove_headers", "remove_query_parameters", "credential"} {
 					allowed[key] = true
 				}
-			} else if typ != "openai_subscription" && typ != "xai_subscription" {
+			} else if typ != "anthropic_subscription" && typ != "openai_subscription" && typ != "xai_subscription" {
 				for _, key := range []string{"upstream", "upstreams", "routes", "remove_headers", "remove_query_parameters", "credential"} {
 					allowed[key] = true
 				}
@@ -327,7 +327,7 @@ func normalizedAddress(address string) string {
 }
 
 func validateBackend(b *Backend) error {
-	if b.Type == "openai_subscription" || b.Type == "xai_subscription" {
+	if b.Type == "anthropic_subscription" || b.Type == "openai_subscription" || b.Type == "xai_subscription" {
 		if b.Upstream != "" || len(b.Upstreams) > 0 || len(b.Routes) > 0 || len(b.RemoveHeaders) > 0 || len(b.RemoveQueryParameters) > 0 || b.Credential != nil {
 			return fmt.Errorf("%s does not accept additional fields", b.Type)
 		}

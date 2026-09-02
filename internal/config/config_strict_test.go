@@ -52,6 +52,7 @@ func TestLoadRejectsListenerAndBackendValidation(t *testing.T) {
 		{"empty backends", strings.Replace(valid, `"backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]`, `"backends":[]`, 1), "has no backends"},
 		{"missing type", strings.Replace(valid, `"type":"http",`, "", 1), "unknown backend type"},
 		{"unknown type", strings.Replace(valid, `"type":"http"`, `"type":"other"`, 1), "unknown backend type"},
+		{"anthropic subscription upstream", subscriptionWith("anthropic_subscription", `"upstream":"https://x"`), "does not belong"},
 		{"subscription upstream", subscriptionWith("openai_subscription", `"upstream":"https://x"`), "does not belong"},
 		{"subscription routes", subscriptionWith("openai_subscription", `"routes":[]`), "does not belong"},
 		{"subscription headers", subscriptionWith("openai_subscription", `"remove_headers":["X"]`), "does not belong"},

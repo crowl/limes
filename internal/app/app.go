@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crowl/limes/internal/anthropic"
 	"github.com/crowl/limes/internal/ca"
 	"github.com/crowl/limes/internal/config"
 	"github.com/crowl/limes/internal/httpsproxy"
@@ -154,6 +155,17 @@ func prepareBackend(index int, backend config.Backend, getenv func(string) strin
 			return result, err
 		}
 		result.handler = handler
+	case "anthropic_subscription":
+		handler, available, err := anthropic.Available(getenv)
+		if err != nil {
+			result.unavailable = "subscription credentials could not be loaded"
+			return result, err
+		}
+		if !available {
+			result.unavailable = "subscription credentials are unavailable"
+			return result, nil
+		}
+		result.handler = handler
 	case "openai_subscription":
 		handler, available, err := openai.Available(getenv)
 		if err != nil {
@@ -185,6 +197,8 @@ func prepareBackend(index int, backend config.Backend, getenv func(string) strin
 
 func backendTarget(backend config.Backend) string {
 	switch backend.Type {
+	case "anthropic_subscription":
+		return "Anthropic subscription"
 	case "openai_subscription":
 		return "OpenAI subscription"
 	case "xai_subscription":

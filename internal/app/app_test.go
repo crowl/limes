@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -111,6 +112,33 @@ func TestRunValidatesAllBackendsBeforeBinding(t *testing.T) {
 	}
 	if bindCalled {
 		t.Fatal("bind was called before invalid configuration was rejected")
+	}
+}
+
+func TestSelectProvidersPrefersAvailableAnthropicSubscription(t *testing.T) {
+	directory := t.TempDir()
+	expiresAt := time.Now().Add(time.Hour).UnixMilli()
+	contents := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"token","refreshToken":"refresh","expiresAt":%d,"scopes":["user:inference"]}}`, expiresAt)
+	if err := os.WriteFile(filepath.Join(directory, ".credentials.json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := config.File{Listeners: []config.Listener{{Name: "anthropic", Address: "127.0.0.1:0", Backends: []config.Backend{
+		{Type: "anthropic_subscription"}, httpBackend("KEY"),
+	}}}}
+	providers, err := selectProviders(settings, func(name string) string {
+		if name == "CLAUDE_CONFIG_DIR" {
+			return directory
+		}
+		if name == "KEY" {
+			return "fallback"
+		}
+		return ""
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 1 || providers[0].authMode != "anthropic_subscription" || providers[0].name != "anthropic" {
+		t.Fatalf("selected providers = %#v", providers)
 	}
 }
 
