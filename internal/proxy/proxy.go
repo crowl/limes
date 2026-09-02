@@ -58,9 +58,11 @@ func newHandler(backend Backend, transport http.RoundTripper) http.Handler {
 }
 
 // NewTransport returns a transport with explicit bounds suitable for upstreams.
+// It ignores the ambient proxy environment: Limes binds proxy listeners itself,
+// so honouring HTTPS_PROXY here could route an upstream request back into Limes.
 func NewTransport() *http.Transport {
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
