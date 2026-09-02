@@ -23,6 +23,11 @@ import (
 	"github.com/crowl/limes/internal/proxy"
 )
 
+// InterceptedHost is the host clients address to reach this backend through
+// the Limes proxy. Requests are served from Grok subscription credentials
+// rather than being forwarded to it.
+const InterceptedHost = "api.x.ai"
+
 const (
 	xaiIssuer       = "https://auth.x.ai"
 	grokClientID    = "b1a00492-073a-47ea-816f-4c329264a828"

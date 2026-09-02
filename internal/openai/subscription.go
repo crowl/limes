@@ -22,6 +22,11 @@ import (
 	"github.com/crowl/limes/internal/proxy"
 )
 
+// InterceptedHost is the host clients address to reach this backend through
+// the Limes proxy. Requests are served from ChatGPT subscription credentials
+// rather than being forwarded to it.
+const InterceptedHost = "api.openai.com"
+
 const (
 	oauthTokenURL   = "https://auth.openai.com/oauth/token"
 	codexClientID   = "app_EMoamEEZ73f0CkXaXp7hrann"

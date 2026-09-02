@@ -26,11 +26,32 @@ type Options struct {
 
 type File struct {
 	Admin     *Admin     `json:"admin,omitempty"`
-	Listeners []Listener `json:"listeners"`
+	Proxy     *Proxy     `json:"proxy,omitempty"`
+	Listeners []Listener `json:"listeners,omitempty"`
 }
 
 type Admin struct {
 	Address string `json:"address"`
+}
+
+// Proxy configures the explicit HTTP and HTTPS proxy. Its rules claim the hosts
+// Limes intercepts. Unclaimed decides what happens to every other destination
+// and defaults to relaying it unmodified.
+type Proxy struct {
+	Address   string `json:"address"`
+	Unclaimed string `json:"unclaimed,omitempty"`
+	Rules     []Rule `json:"rules"`
+}
+
+// Relay and Deny are the accepted values of Proxy.Unclaimed.
+const (
+	Relay = "relay"
+	Deny  = "deny"
+)
+
+type Rule struct {
+	Name     string    `json:"name"`
+	Backends []Backend `json:"backends"`
 }
 
 type Listener struct {
@@ -41,7 +62,6 @@ type Listener struct {
 
 type Backend struct {
 	Type                  string      `json:"type"`
-	Upstream              string      `json:"upstream,omitempty"`
 	Upstreams             []string    `json:"upstreams,omitempty"`
 	Routes                []Route     `json:"routes,omitempty"`
 	RemoveHeaders         []string    `json:"remove_headers,omitempty"`
@@ -130,6 +150,11 @@ func Load(path string) (File, error) {
 		return File{}, fmt.Errorf("parse configuration: %w", err)
 	}
 	var raw struct {
+		Proxy *struct {
+			Rules []struct {
+				Backends []map[string]json.RawMessage `json:"backends"`
+			} `json:"rules"`
+		} `json:"proxy"`
 		Listeners []struct {
 			Backends []map[string]json.RawMessage `json:"backends"`
 		} `json:"listeners"`
@@ -144,31 +169,19 @@ func Load(path string) (File, error) {
 		}
 		return File{}, fmt.Errorf("trailing configuration content: %w", err)
 	}
+	backendGroups := make([][]map[string]json.RawMessage, 0, len(raw.Listeners))
 	for _, listener := range raw.Listeners {
-		for _, backend := range listener.Backends {
-			allowed := map[string]bool{"type": true}
-			typeValue, hasType := backend["type"]
-			var typ string
-			if hasType {
-				_ = json.Unmarshal(typeValue, &typ)
-			}
-			if typ == "http" {
-				for _, key := range []string{"upstream", "routes", "remove_headers", "remove_query_parameters", "credential"} {
-					allowed[key] = true
-				}
-			} else if typ == "https" {
-				for _, key := range []string{"upstreams", "routes", "remove_headers", "remove_query_parameters", "credential"} {
-					allowed[key] = true
-				}
-			} else if typ != "anthropic_subscription" && typ != "openai_subscription" && typ != "xai_subscription" {
-				for _, key := range []string{"upstream", "upstreams", "routes", "remove_headers", "remove_query_parameters", "credential"} {
-					allowed[key] = true
-				}
-			}
-			for key := range backend {
-				if !allowed[key] {
-					return File{}, fmt.Errorf("backend field %q does not belong to its type", key)
-				}
+		backendGroups = append(backendGroups, listener.Backends)
+	}
+	if raw.Proxy != nil {
+		for _, rule := range raw.Proxy.Rules {
+			backendGroups = append(backendGroups, rule.Backends)
+		}
+	}
+	for _, backends := range backendGroups {
+		for _, backend := range backends {
+			if err := rejectForeignBackendFields(backend); err != nil {
+				return File{}, err
 			}
 		}
 	}
@@ -185,6 +198,27 @@ func Load(path string) (File, error) {
 		return File{}, fmt.Errorf("trailing configuration content: %w", err)
 	}
 	return cfg, validateFile(&cfg)
+}
+
+func rejectForeignBackendFields(backend map[string]json.RawMessage) error {
+	allowed := map[string]bool{"type": true}
+	var typ string
+	if typeValue, hasType := backend["type"]; hasType {
+		_ = json.Unmarshal(typeValue, &typ)
+	}
+	switch typ {
+	case "anthropic_subscription", "openai_subscription", "xai_subscription":
+	default:
+		for _, key := range []string{"upstreams", "routes", "remove_headers", "remove_query_parameters", "credential"} {
+			allowed[key] = true
+		}
+	}
+	for key := range backend {
+		if !allowed[key] {
+			return fmt.Errorf("backend field %q does not belong to its type", key)
+		}
+	}
+	return nil
 }
 
 func rejectDuplicateJSONKeys(contents []byte) error {
@@ -247,7 +281,7 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var tokenName = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 
 func validateFile(cfg *File) error {
-	if len(cfg.Listeners) == 0 {
+	if len(cfg.Listeners) == 0 && cfg.Proxy == nil {
 		return errors.New("listeners must not be empty")
 	}
 	names := map[string]bool{}
@@ -258,22 +292,19 @@ func validateFile(cfg *File) error {
 		}
 		addresses[normalizedAddress(cfg.Admin.Address)] = true
 	}
+	if cfg.Proxy != nil {
+		if err := validateProxy(cfg.Proxy, names, addresses); err != nil {
+			return err
+		}
+	}
 	for i := range cfg.Listeners {
 		l := &cfg.Listeners[i]
 		if l.Name == "" || names[l.Name] {
 			return fmt.Errorf("invalid or duplicate listener name %q", l.Name)
 		}
 		names[l.Name] = true
-		if l.Address == "" {
-			return fmt.Errorf("listener %q address is required", l.Name)
-		}
-		_, port, err := net.SplitHostPort(l.Address)
-		if err != nil {
-			return fmt.Errorf("listener %q address: %w", l.Name, err)
-		}
-		portNumber, err := strconv.ParseUint(port, 10, 16)
-		if err != nil || portNumber == 0 {
-			return fmt.Errorf("listener %q address has invalid port %q", l.Name, port)
+		if err := validateListenAddress(l.Address, fmt.Sprintf("listener %q", l.Name)); err != nil {
+			return err
 		}
 		addressKey := normalizedAddress(l.Address)
 		if addresses[addressKey] {
@@ -284,10 +315,64 @@ func validateFile(cfg *File) error {
 			return fmt.Errorf("listener %q has no backends", l.Name)
 		}
 		for j := range l.Backends {
-			if err := validateBackend(&l.Backends[j]); err != nil {
+			if err := validateBackend(&l.Backends[j], originBackend); err != nil {
 				return fmt.Errorf("listener %q backend %d: %w", l.Name, j, err)
 			}
 		}
+	}
+	return nil
+}
+
+// validateProxy shares the listener name space so the admin panel and request
+// log identify every rule and listener unambiguously.
+func validateProxy(proxy *Proxy, names, addresses map[string]bool) error {
+	if err := validateListenAddress(proxy.Address, "proxy"); err != nil {
+		return err
+	}
+	addressKey := normalizedAddress(proxy.Address)
+	if addresses[addressKey] {
+		return fmt.Errorf("duplicate listener address %q", proxy.Address)
+	}
+	addresses[addressKey] = true
+	switch proxy.Unclaimed {
+	case "":
+		proxy.Unclaimed = Relay
+	case Relay, Deny:
+	default:
+		return fmt.Errorf("proxy unclaimed must be %q or %q, got %q", Relay, Deny, proxy.Unclaimed)
+	}
+	if len(proxy.Rules) == 0 {
+		return errors.New("proxy rules must not be empty")
+	}
+	for i := range proxy.Rules {
+		rule := &proxy.Rules[i]
+		if rule.Name == "" || names[rule.Name] {
+			return fmt.Errorf("invalid or duplicate proxy rule name %q", rule.Name)
+		}
+		names[rule.Name] = true
+		if len(rule.Backends) == 0 {
+			return fmt.Errorf("proxy rule %q has no backends", rule.Name)
+		}
+		for j := range rule.Backends {
+			if err := validateBackend(&rule.Backends[j], claimedBackend); err != nil {
+				return fmt.Errorf("proxy rule %q backend %d: %w", rule.Name, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateListenAddress(address, name string) error {
+	if address == "" {
+		return fmt.Errorf("%s address is required", name)
+	}
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("%s address: %w", name, err)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return fmt.Errorf("%s address has invalid port %q", name, port)
 	}
 	return nil
 }
@@ -326,39 +411,44 @@ func normalizedAddress(address string) string {
 	return net.JoinHostPort(host, port)
 }
 
-func validateBackend(b *Backend) error {
+// backendUse distinguishes a backend bound to a listener address from one whose
+// upstream host is claimed by the proxy and reached by intercepting its TLS.
+type backendUse int
+
+const (
+	originBackend backendUse = iota
+	claimedBackend
+)
+
+func validateBackend(b *Backend, use backendUse) error {
 	if b.Type == "anthropic_subscription" || b.Type == "openai_subscription" || b.Type == "xai_subscription" {
-		if b.Upstream != "" || len(b.Upstreams) > 0 || len(b.Routes) > 0 || len(b.RemoveHeaders) > 0 || len(b.RemoveQueryParameters) > 0 || b.Credential != nil {
+		if len(b.Upstreams) > 0 || len(b.Routes) > 0 || len(b.RemoveHeaders) > 0 || len(b.RemoveQueryParameters) > 0 || b.Credential != nil {
 			return fmt.Errorf("%s does not accept additional fields", b.Type)
 		}
 		return nil
 	}
-	if b.Type != "http" && b.Type != "https" {
+	if b.Type != "http" {
 		return fmt.Errorf("unknown backend type %q", b.Type)
 	}
-	if b.Type == "http" {
-		if err := validateUpstream(b.Upstream, false); err != nil {
+	if len(b.Upstreams) == 0 {
+		return errors.New("upstreams must not be empty")
+	}
+	// An origin listener has no Host to route on, so a second upstream would
+	// be unreachable. A claimed host is selected by the CONNECT authority.
+	if use == originBackend && len(b.Upstreams) > 1 {
+		return errors.New("a listener backend accepts exactly one upstream; use a proxy rule to serve several hosts")
+	}
+	hosts := map[string]bool{}
+	for _, upstream := range b.Upstreams {
+		if err := validateUpstream(upstream, use); err != nil {
 			return err
 		}
-	} else {
-		if len(b.Upstreams) == 0 {
-			return errors.New("upstreams must not be empty")
+		parsed, _ := url.Parse(upstream)
+		host := strings.ToLower(parsed.Hostname())
+		if hosts[host] {
+			return fmt.Errorf("duplicate upstream host %q", host)
 		}
-		seen := make(map[string]bool)
-		for _, upstream := range b.Upstreams {
-			if err := validateUpstream(upstream, true); err != nil {
-				return err
-			}
-			u, _ := url.Parse(upstream)
-			authority := strings.ToLower(u.Host)
-			if u.Port() == "" {
-				authority = net.JoinHostPort(strings.ToLower(u.Hostname()), "443")
-			}
-			if seen[authority] {
-				return fmt.Errorf("duplicate upstream authority %q", authority)
-			}
-			seen[authority] = true
-		}
+		hosts[host] = true
 	}
 	if len(b.Routes) == 0 {
 		return errors.New("routes must not be empty")
@@ -384,13 +474,13 @@ func validateBackend(b *Backend) error {
 		}
 		seen[k] = true
 	}
-	headers := map[string]bool{}
+	removed := map[string]bool{}
 	for _, h := range b.RemoveHeaders {
 		h = http.CanonicalHeaderKey(h)
-		if !tokenName.MatchString(h) || headers[strings.ToLower(h)] {
+		if !tokenName.MatchString(h) || removed[strings.ToLower(h)] {
 			return fmt.Errorf("invalid or duplicate header %q", h)
 		}
-		headers[strings.ToLower(h)] = true
+		removed[strings.ToLower(h)] = true
 	}
 	q := map[string]bool{}
 	for _, n := range b.RemoveQueryParameters {
@@ -413,38 +503,26 @@ func validateBackend(b *Backend) error {
 	return nil
 }
 
-func validateUpstream(value string, httpsOnly bool) error {
+func validateUpstream(value string, use backendUse) error {
+	const malformed = "upstreams must contain absolute http or https URLs without userinfo, query, or fragment"
 	u, err := url.Parse(value)
 	if err != nil {
-		if httpsOnly {
-			return errors.New("upstreams must contain absolute https URLs without userinfo, query, or fragment")
-		}
-		return errors.New("upstream must be an absolute http or https URL without userinfo, query, or fragment")
+		return errors.New(malformed)
 	}
 	validScheme := u.Scheme == "http" || u.Scheme == "https"
-	if httpsOnly {
-		validScheme = u.Scheme == "https"
-	}
 	if u.Scheme == "" || u.Host == "" || u.Hostname() == "" || !validScheme || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		if httpsOnly {
-			return errors.New("upstreams must contain absolute https URLs without userinfo, query, or fragment")
-		}
-		return errors.New("upstream must be an absolute http or https URL without userinfo, query, or fragment")
+		return errors.New(malformed)
 	}
-	if httpsOnly && u.Path != "" && u.Path != "/" {
-		return errors.New("HTTPS upstreams must not contain paths")
-	}
-	if httpsOnly && net.ParseIP(u.Hostname()) != nil {
-		return errors.New("HTTPS upstreams must use DNS hostnames")
+	// The proxy issues a certificate for each claimed host, which requires a
+	// name a client can present in SNI.
+	if use == claimedBackend && net.ParseIP(u.Hostname()) != nil {
+		return errors.New("a claimed upstream must use a DNS hostname")
 	}
 	if hasExplicitPort(u) {
 		port := u.Port()
 		portNumber, portErr := strconv.ParseUint(port, 10, 16)
 		if port == "" || portErr != nil || portNumber == 0 {
 			return fmt.Errorf("upstream has invalid explicit port %q", port)
-		}
-		if httpsOnly && port != "443" {
-			return fmt.Errorf("HTTPS upstream explicit port must be 443, got %q", port)
 		}
 	}
 	return nil

@@ -10,7 +10,7 @@ import (
 
 func TestLoadValidatesExplicitUpstreamPortsAndIPv6(t *testing.T) {
 	valid := func(upstream string) string {
-		return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"http","upstream":"` + upstream + `","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`
+		return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"http","upstreams":["` + upstream + `"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`
 	}
 	cases := []struct {
 		name     string

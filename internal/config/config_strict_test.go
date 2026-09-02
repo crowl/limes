@@ -49,17 +49,17 @@ func TestLoadRejectsListenerAndBackendValidation(t *testing.T) {
 		{"invalid listener port", strings.Replace(valid, `"address":"127.0.0.1:1"`, `"address":"127.0.0.1:0"`, 1), "invalid port"},
 		{"duplicate listener name", `{"listeners":[` + validListener("one", "127.0.0.1:1") + `,` + validListener("one", "127.0.0.1:2") + `]}`, "duplicate listener name"},
 		{"duplicate listener address", `{"listeners":[` + validListener("one", "127.0.0.1:1") + `,` + validListener("two", "127.0.0.1:1") + `]}`, "duplicate listener address"},
-		{"empty backends", strings.Replace(valid, `"backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]`, `"backends":[]`, 1), "has no backends"},
+		{"empty backends", strings.Replace(valid, `"backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]`, `"backends":[]`, 1), "has no backends"},
 		{"missing type", strings.Replace(valid, `"type":"http",`, "", 1), "unknown backend type"},
 		{"unknown type", strings.Replace(valid, `"type":"http"`, `"type":"other"`, 1), "unknown backend type"},
-		{"anthropic subscription upstream", subscriptionWith("anthropic_subscription", `"upstream":"https://x"`), "does not belong"},
-		{"subscription upstream", subscriptionWith("openai_subscription", `"upstream":"https://x"`), "does not belong"},
+		{"anthropic subscription upstream", subscriptionWith("anthropic_subscription", `"upstreams":["https://x"]`), "does not belong"},
+		{"subscription upstream", subscriptionWith("openai_subscription", `"upstreams":["https://x"]`), "does not belong"},
 		{"subscription routes", subscriptionWith("openai_subscription", `"routes":[]`), "does not belong"},
 		{"subscription headers", subscriptionWith("openai_subscription", `"remove_headers":["X"]`), "does not belong"},
 		{"subscription query", subscriptionWith("openai_subscription", `"remove_query_parameters":["x"]`), "does not belong"},
 		{"subscription credential", subscriptionWith("openai_subscription", `"credential":{"environment":"X","header":"X"}`), "does not belong"},
-		{"xAI subscription upstream", subscriptionWith("xai_subscription", `"upstream":"https://x"`), "does not belong"},
-		{"missing upstream", strings.Replace(valid, `"upstream":"https://example.test",`, "", 1), "upstream must be"},
+		{"xAI subscription upstream", subscriptionWith("xai_subscription", `"upstreams":["https://x"]`), "does not belong"},
+		{"missing upstream", strings.Replace(valid, `"upstreams":["https://example.test"],`, "", 1), "upstreams must not be empty"},
 		{"missing routes", strings.Replace(valid, `"routes":[{"method":"POST","path":"/x"}],`, "", 1), "routes must not be empty"},
 		{"missing credential", strings.Replace(valid, `,"credential":{"environment":"KEY","header":"Authorization"}`, "", 1), "credential environment"},
 		{"invalid environment", strings.Replace(valid, `"environment":"KEY"`, `"environment":"BAD-NAME"`, 1), "credential environment"},
@@ -119,32 +119,44 @@ func TestLoadRejectsAdminAndProxyAddressCollision(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsHTTPSBackend(t *testing.T) {
-	body := `{"listeners":[{"name":"github","address":"127.0.0.1:8791","backends":[{"type":"https","upstreams":["https://github.com","https://api.github.com"],"routes":[{"method":"GET","path":"/{path...}"}],"remove_headers":["Authorization"],"credential":{"environment":"GITHUB_PAT","header":"Authorization","basic_username":"x-access-token"}}]}]}`
+func TestLoadAcceptsSeveralUpstreamsInAProxyRule(t *testing.T) {
+	body := `{"proxy":{"address":"0.0.0.0:8800","rules":[{"name":"github","backends":[{"type":"http","upstreams":["https://github.com","https://api.github.com"],"routes":[{"method":"GET","path":"/{path...}"}],"remove_headers":["Authorization"],"credential":{"environment":"GITHUB_PAT","header":"Authorization","basic_username":"x-access-token"}}]}]}}`
 	file, err := Load(writeConfig(t, body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := file.Listeners[0].Backends[0]
-	if backend.Type != "https" || len(backend.Upstreams) != 2 || !backend.Routes[0].Pattern.Matches("/owner/repository") {
+	backend := file.Proxy.Rules[0].Backends[0]
+	if backend.Type != "http" || len(backend.Upstreams) != 2 || !backend.Routes[0].Pattern.Matches("/owner/repository") {
 		t.Fatalf("backend = %#v", backend)
 	}
 }
 
-func TestLoadRejectsInvalidHTTPSBackend(t *testing.T) {
-	valid := `{"listeners":[{"name":"github","address":"127.0.0.1:8791","backends":[{"type":"https","upstreams":["https://github.com"],"routes":[{"method":"GET","path":"/{path...}"}],"credential":{"environment":"GITHUB_PAT","header":"Authorization","prefix":"Bearer "}}]}]}`
-	for name, body := range map[string]string{
-		"singular upstream": strings.Replace(valid, `"upstreams":["https://github.com"]`, `"upstream":"https://github.com"`, 1),
-		"empty upstreams":   strings.Replace(valid, `"https://github.com"`, "", 1),
-		"http upstream":     strings.Replace(valid, "https://github.com", "http://github.com", 1),
-		"upstream path":     strings.Replace(valid, "https://github.com", "https://github.com/api", 1),
-		"non-443 port":      strings.Replace(valid, "https://github.com", "https://github.com:8443", 1),
-		"IP upstream":       strings.Replace(valid, "https://github.com", "https://127.0.0.1", 1),
-		"duplicate":         strings.Replace(valid, `"https://github.com"`, `"https://github.com","https://github.com:443"`, 1),
+func TestLoadRejectsInvalidUpstreams(t *testing.T) {
+	claimed := `{"proxy":{"address":"0.0.0.0:8800","rules":[{"name":"github","backends":[{"type":"http","upstreams":["https://github.com"],"routes":[{"method":"GET","path":"/{path...}"}],"credential":{"environment":"GITHUB_PAT","header":"Authorization","prefix":"Bearer "}}]}]}}`
+	for _, testCase := range []struct{ name, body, want string }{
+		{"empty upstreams", strings.Replace(claimed, `"https://github.com"`, "", 1), "upstreams must not be empty"},
+		{"claimed IP upstream", strings.Replace(claimed, "https://github.com", "https://127.0.0.1", 1), "must use a DNS hostname"},
+		{"duplicate host", strings.Replace(claimed, `"https://github.com"`, `"https://github.com","https://github.com:443"`, 1), "duplicate upstream host"},
+		{"relative upstream", strings.Replace(claimed, "https://github.com", "github.com", 1), "absolute http or https"},
+		{"several upstreams on a listener", strings.Replace(validConfigJSON(), `"upstreams":["https://example.test"]`, `"upstreams":["https://example.test","https://other.test"]`, 1), "exactly one upstream"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := Load(writeConfig(t, body)); err == nil {
-				t.Fatal("Load() succeeded")
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, testCase.body))
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("Load() error = %v, want containing %q", err, testCase.want)
+			}
+		})
+	}
+}
+
+// A listener reaches its upstream directly, so it may address hosts the proxy
+// could never claim a certificate for.
+func TestLoadAcceptsIPAndPathUpstreamsOnAListener(t *testing.T) {
+	for _, upstream := range []string{"http://127.0.0.1:9000", "https://example.test/api/v1", "https://example.test:8443"} {
+		t.Run(upstream, func(t *testing.T) {
+			body := strings.Replace(validConfigJSON(), "https://example.test", upstream, 1)
+			if _, err := Load(writeConfig(t, body)); err != nil {
+				t.Fatalf("Load() error = %v", err)
 			}
 		})
 	}
@@ -199,11 +211,11 @@ func writeConfig(t *testing.T, contents string) string {
 }
 
 func validConfigJSON() string {
-	return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`
+	return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`
 }
 
 func validListener(name, address string) string {
-	return `{"name":"` + name + `","address":"` + address + `","backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}`
+	return `{"name":"` + name + `","address":"` + address + `","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}`
 }
 func subscriptionWith(typ, field string) string {
 	return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"` + typ + `",` + field + `}]}]}`

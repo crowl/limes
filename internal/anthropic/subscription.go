@@ -20,6 +20,10 @@ import (
 	"github.com/crowl/limes/internal/proxy"
 )
 
+// InterceptedHost is the host clients address to reach this backend through
+// the Limes proxy.
+const InterceptedHost = "api.anthropic.com"
+
 const (
 	inferenceScope = "user:inference"
 	oauthClientID  = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
