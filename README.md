@@ -14,6 +14,13 @@ that need to exercise their authority without possessing the underlying secret.
 Useful clients include sandboxed processes, containers, development tools,
 automation, and local applications.
 
+Limes works two ways. A **listener** gives one provider its own local address,
+and the client is configured with that address as its base URL. A **proxy**
+gives a client a single `HTTPS_PROXY` endpoint, claims the hosts named by its
+rules, and relays every other destination to its real origin. Proxy mode suits
+containers, which can then run unmodified tools against real provider hostnames
+without holding any credential.
+
 Requests and responses are streamed without automatic retries.
 
 ## Security model
@@ -28,9 +35,16 @@ they must be reached from a local VM or container, and do not expose them to
 untrusted networks. When a non-loopback listener is required, rely on host
 firewall and virtualization boundaries to restrict access.
 
-The generic backends accept only configured routes and upstreams. Caller-provided
-credential headers are always replaced. Limes does not retry requests, so it
-does not duplicate non-idempotent operations.
+Listeners and claimed proxy hosts accept only configured routes and upstreams.
+Caller-provided credential headers are always replaced. Limes does not retry
+requests, so it does not duplicate non-idempotent operations.
+
+Proxy mode is not an egress allowlist. A destination no rule claims is relayed
+to its real origin unmodified, uninspected, and without credentials, so a client
+using Limes as its proxy reaches the internet as it otherwise would. Limes only
+refuses to relay to non-public addresses: loopback, private, link-local, and
+multicast destinations are rejected after resolution, which keeps a client from
+using Limes to reach the host itself or the surrounding private network.
 
 ## Installation
 
@@ -41,11 +55,20 @@ go build -o limes .
 ./limes -version
 mkdir -p ~/.config/limes
 cp config.example.json ~/.config/limes/config.json
+./limes ca init
 ./limes
 ```
 
 Set the environment variables referenced by the configuration before starting
 Limes.
+
+The example configuration defines a proxy, which terminates TLS for the hosts it
+claims, so `limes ca init` must run before the first start. Clients then need the
+public certificate:
+
+```sh
+./limes ca certificate > limes-ca.pem
+```
 
 To use another configuration file:
 
@@ -70,16 +93,19 @@ A configuration may enable the self-contained admin panel on a loopback address:
   "admin": {
     "address": "127.0.0.1:8799"
   },
-  "listeners": [
-    "..."
-  ]
+  "proxy": {
+    "...": "..."
+  }
 }
 ```
 
-Open `http://127.0.0.1:8799/` to inspect listeners and switch between their
-available backends without restarting Limes. Open
-`http://127.0.0.1:8799/requests` to view the request log. Switching affects new
-requests; in-flight requests finish on the backend that accepted them. The
+Open `http://127.0.0.1:8799/` to inspect listeners and proxy rules and switch
+between their available backends without restarting Limes. Open
+`http://127.0.0.1:8799/requests` to view the request log. Requests to a claimed
+host are recorded under their rule name; relayed connections are recorded as
+`CONNECT` to the destination authority, without any view of their contents.
+Switching affects new requests; in-flight requests finish on the backend that
+accepted them. The
 selection is held only in memory, so restarting Limes restores the first
 available backend in configuration order. The panel keeps the latest 200
 completed requests in memory and shows their listener, backend, method, path,
@@ -98,8 +124,124 @@ the admin panel. Limes can run with only the admin panel when every backend is
 unavailable. Without an enabled admin panel, Limes exits when no backend is
 available.
 
-A configuration defines one or more listeners and an ordered list of backend
-candidates for each listener. The first available candidate is active at startup:
+A configuration defines a `proxy`, one or more `listeners`, or both. Each proxy
+rule and each listener holds an ordered list of backend candidates, and the
+first available candidate is active at startup.
+
+[`config.example.json`](config.example.json) configures a proxy, which is the
+usual choice: a client gets one endpoint, keeps using real provider hostnames,
+and needs no per-service configuration. Listeners suit clients that cannot use a
+proxy or cannot be given a CA certificate, since an `http` listener needs
+neither.
+
+### Proxy
+
+A `proxy` block binds one address that serves as a client's HTTP and HTTPS
+proxy. Each rule claims one or more hosts and holds an ordered list of backend
+candidates for them:
+
+```json
+{
+  "proxy": {
+    "address": "0.0.0.0:8800",
+    "rules": [
+      {
+        "name": "openai",
+        "backends": [
+          { "type": "openai_subscription" },
+          {
+            "type": "http",
+            "upstreams": ["https://api.openai.com"],
+            "routes": [{ "method": "POST", "path": "/v1/responses" }],
+            "remove_headers": ["Authorization"],
+            "credential": {
+              "environment": "OPENAI_API_KEY",
+              "header": "Authorization",
+              "prefix": "Bearer "
+            }
+          }
+        ]
+      },
+      {
+        "name": "github",
+        "backends": [
+          {
+            "type": "http",
+            "upstreams": ["https://github.com", "https://api.github.com"],
+            "routes": [{ "method": "GET", "path": "/{path...}" }],
+            "remove_headers": ["Authorization"],
+            "credential": {
+              "environment": "GITHUB_PAT",
+              "header": "Authorization",
+              "basic_username": "x-access-token"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+A backend claims the hosts a client addresses to reach it:
+
+| Backend                  | Claimed hosts         |
+| ------------------------ | --------------------- |
+| `http`                   | each `upstreams` host |
+| `openai_subscription`    | `api.openai.com`      |
+| `anthropic_subscription` | `api.anthropic.com`   |
+| `xai_subscription`       | `api.x.ai`            |
+
+A subscription backend claims the provider's public API host but serves the
+request from local subscription credentials, so a client configured for
+`https://api.openai.com` reaches ChatGPT subscription authority without
+knowing it. Two rules may not claim the same host; Limes refuses to start when
+they do.
+
+A proxy requires the CA, because claiming a host means terminating its TLS.
+Run `limes ca init` before starting Limes with a `proxy` block.
+
+`unclaimed` decides what happens to destinations no rule claims:
+
+```json
+{ "proxy": { "address": "0.0.0.0:8800", "unclaimed": "deny", "rules": [] } }
+```
+
+`relay`, the default, forwards them to their real origin unmodified. `deny`
+rejects them, which turns the proxy into an egress allowlist for clients that
+should reach nothing but the configured hosts. Both refuse non-public
+destinations.
+
+Requests to a claimed host follow the rule's routes and credential exactly as a
+listener would. Because a host is claimed before any request is visible, a
+claimed host that a rule's routes do not allow is rejected with `403` rather
+than relayed. Claimed hosts are served only over `CONNECT` to port 443;
+plain-HTTP requests to a claimed host are rejected so a client cannot bypass
+interception by downgrading.
+
+Intercepted connections negotiate HTTP/1.1. Clients requiring HTTP/2 to a
+claimed host, such as gRPC, are not supported. Relayed connections are opaque
+and unaffected.
+
+Point a container at the proxy and give it the CA certificate:
+
+```sh
+limes ca certificate > limes-ca.pem
+docker run --rm -it \
+  -e HTTPS_PROXY=http://host.docker.internal:8800 \
+  -e HTTP_PROXY=http://host.docker.internal:8800 \
+  -e SSL_CERT_FILE=/etc/limes/limes-ca.pem \
+  -v "$PWD/limes-ca.pem:/etc/limes/limes-ca.pem:ro" \
+  my-image
+```
+
+A proxy and per-provider listeners may both be configured. Their addresses and
+names must differ.
+
+### Listeners
+
+A listener gives one provider its own address, and the client uses that address
+as its base URL:
 
 ```json
 {
@@ -110,7 +252,7 @@ candidates for each listener. The first available candidate is active at startup
       "backends": [
         {
           "type": "http",
-          "upstream": "https://api.example.com",
+          "upstreams": ["https://api.example.com"],
           "routes": [
             { "method": "POST", "path": "/v1/messages" }
           ],
@@ -129,7 +271,7 @@ candidates for each listener. The first available candidate is active at startup
 
 ### HTTP backend
 
-The generic `http` backend:
+The generic `http` backend is the only configurable backend. It:
 
 - Forwards only configured method and path combinations
 - Removes configured headers and query parameters
@@ -138,50 +280,18 @@ The generic `http` backend:
 - Supports upstream path prefixes
 - Streams upstream responses
 
-Configure a client with the listener URL and any nonempty placeholder credential
-it requires. The real credential remains in the Limes process environment.
-
-### HTTPS backend
-
-The generic `https` backend is an explicit HTTPS proxy. It accepts `CONNECT`
-requests only for configured upstream origins, terminates client TLS with the
-Limes CA, applies the same route and credential rules as `http`, and opens a
-separately verified TLS connection to the selected upstream.
-
-Initialize the persistent CA before enabling an `https` backend:
-
-```sh
-limes ca init
-limes ca status
-limes ca certificate > limes-ca.pem
-```
-
-The CA private key remains in the Limes configuration directory. Install or mount
-only the public certificate in clients that use an `https` backend. The CA can
-issue a certificate for each configured upstream, so clients should trust it only
-where interception by Limes is intended.
-
-Rotate the CA explicitly when needed:
-
-```sh
-limes ca rotate --force
-```
-
-Clients trusting the previous CA must be updated after rotation.
-
-An `https` backend uses `upstreams` because the `CONNECT` authority selects among
-fixed origins:
+It takes one or more `upstreams`. A proxy rule may list several, because the
+host a client addresses selects among them:
 
 ```json
 {
-  "type": "https",
+  "type": "http",
   "upstreams": [
     "https://github.com",
     "https://api.github.com"
   ],
   "routes": [
     { "method": "GET", "path": "/{path...}" },
-    { "method": "HEAD", "path": "/{path...}" },
     { "method": "POST", "path": "/{path...}" }
   ],
   "remove_headers": ["Authorization"],
@@ -193,9 +303,44 @@ fixed origins:
 }
 ```
 
+A listener backend accepts exactly one upstream, since a client addresses the
+listener rather than the upstream host and there is nothing to select among.
+
+Upstreams reached through a listener may be any absolute `http` or `https` URL,
+including IP addresses, explicit ports, and path prefixes. An upstream claimed
+by a proxy rule must use a DNS hostname, because the proxy issues a certificate
+for the host it claims.
+
 `basic_username` constructs HTTP Basic authentication with the environment
 credential as its password. It is mutually exclusive with `prefix`. This is
 useful when an origin serves both ordinary APIs and Git smart HTTP.
+
+Configure a client with the listener URL, or with the proxy and the real
+upstream hostname, and any nonempty placeholder credential it requires. The real
+credential remains in the Limes process environment.
+
+### Certificate authority
+
+A proxy terminates TLS for the hosts it claims, so it needs a local CA:
+
+```sh
+limes ca init
+limes ca status
+limes ca certificate > limes-ca.pem
+```
+
+The CA private key remains in the Limes configuration directory. Install or mount
+only the public certificate in clients that use the proxy. The CA can issue a
+certificate for any host Limes claims, so clients should trust it only where
+interception by Limes is intended.
+
+Rotate the CA explicitly when needed:
+
+```sh
+limes ca rotate --force
+```
+
+Clients trusting the previous CA must be updated after rotation.
 
 ### Routes
 
@@ -218,9 +363,10 @@ in route matching.
 
 ### Backend selection
 
-Limes selects the first available backend for each listener at startup. An `http`
-or `https` backend is available when its credential environment variable is
-nonempty.
+Limes selects the first available backend for each listener and proxy rule at
+startup. An `http` backend is available when its credential
+environment variable is nonempty. A proxy rule with no available backend rejects
+requests to the hosts it claims; it does not fall back to relaying them.
 
 The built-in subscription backends are available when Limes finds valid
 credentials from the corresponding official CLI login. They use consumer
@@ -265,8 +411,9 @@ client but are less stable than its public API-key contract and may require Lime
 updates when Claude Code changes.
 
 A listener is disabled when none of its backends are available. Startup fails if
-every listener is disabled. Selected backends do not change while Limes is
-running.
+every listener is disabled and no proxy or admin panel is configured. A proxy is
+bound whenever it is configured, because it relays unclaimed destinations even
+when no rule has credentials.
 
 See [`config.example.json`](config.example.json) for a complete configuration.
 
@@ -287,7 +434,7 @@ and `checksums.txt` from GitHub, verifies the SHA-256 checksum, and installs:
 - Credentials: `${XDG_CONFIG_HOME:-$HOME/.config}/limes/environment`
 
 The release must include the features used by your configuration. In particular,
-the `https` backend and CA commands require a release containing those changes.
+the proxy and CA commands require a release containing those changes.
 
 ### Prepare configuration and credentials
 
@@ -326,8 +473,8 @@ Ensure the credential file is accessible only to your user:
 chmod 600 ~/.config/limes/environment
 ```
 
-If the configuration enables an `https` backend, initialize the CA using the
-release binary after installation, then restart the service:
+If the configuration defines a proxy, initialize the CA using the release binary
+after installation, then restart the service:
 
 ```sh
 ~/.local/bin/limes ca init
@@ -350,9 +497,8 @@ LaunchAgent definition while preserving configuration, credentials, and CA
 material.
 
 The installer validates the credential-file permissions and required installation
-files before loading the LaunchAgent. If an `https` backend is configured before
-its CA is initialized, the service will log a startup error until `limes ca init`
-is run.
+files before loading the LaunchAgent. If a proxy is configured before its CA is
+initialized, the service will fail to start until `limes ca init` is run.
 
 ### Operate the service
 

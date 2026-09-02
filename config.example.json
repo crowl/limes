@@ -2,129 +2,125 @@
   "admin": {
     "address": "127.0.0.1:8799"
   },
-  "listeners": [
-    {
-      "name": "openai",
-      "address": "0.0.0.0:8787",
-      "backends": [
-        { "type": "openai_subscription" },
-        {
-          "type": "http",
-          "upstream": "https://api.openai.com",
-          "routes": [
-            { "method": "POST", "path": "/v1/responses" },
-            { "method": "POST", "path": "/v1/responses/input_tokens" }
-          ],
-          "remove_headers": [
-            "Authorization",
-            "OpenAI-Organization",
-            "OpenAI-Project"
-          ],
-          "credential": {
-            "environment": "OPENAI_API_KEY",
-            "header": "Authorization",
-            "prefix": "Bearer "
+  "proxy": {
+    "address": "0.0.0.0:8800",
+    "rules": [
+      {
+        "name": "openai",
+        "backends": [
+          { "type": "openai_subscription" },
+          {
+            "type": "http",
+            "upstreams": ["https://api.openai.com"],
+            "routes": [
+              { "method": "POST", "path": "/v1/responses" },
+              { "method": "POST", "path": "/v1/responses/input_tokens" }
+            ],
+            "remove_headers": [
+              "Authorization",
+              "OpenAI-Organization",
+              "OpenAI-Project"
+            ],
+            "credential": {
+              "environment": "OPENAI_API_KEY",
+              "header": "Authorization",
+              "prefix": "Bearer "
+            }
           }
-        }
-      ]
-    },
-    {
-      "name": "gemini",
-      "address": "0.0.0.0:8788",
-      "backends": [
-        {
-          "type": "http",
-          "upstream": "https://generativelanguage.googleapis.com",
-          "routes": [
-            { "method": "POST", "path": "/v1beta/interactions" },
-            {
-              "method": "POST",
-              "path": "/v1beta/models/{model}:generateContent"
-            },
-            {
-              "method": "POST",
-              "path": "/v1beta/models/{model}:streamGenerateContent"
-            },
-            { "method": "POST", "path": "/v1beta/models/{model}:countTokens" }
-          ],
-          "remove_headers": ["Authorization", "x-goog-api-key"],
-          "remove_query_parameters": ["key"],
-          "credential": {
-            "environment": "GEMINI_API_KEY",
-            "header": "x-goog-api-key",
-            "prefix": ""
+        ]
+      },
+      {
+        "name": "anthropic",
+        "backends": [
+          { "type": "anthropic_subscription" },
+          {
+            "type": "http",
+            "upstreams": ["https://api.anthropic.com"],
+            "routes": [
+              { "method": "POST", "path": "/v1/messages" },
+              { "method": "POST", "path": "/v1/messages/count_tokens" }
+            ],
+            "remove_headers": ["Authorization", "x-api-key"],
+            "credential": {
+              "environment": "ANTHROPIC_API_KEY",
+              "header": "x-api-key",
+              "prefix": ""
+            }
           }
-        }
-      ]
-    },
-    {
-      "name": "xai",
-      "address": "0.0.0.0:8790",
-      "backends": [
-        { "type": "xai_subscription" },
-        {
-          "type": "http",
-          "upstream": "https://api.x.ai",
-          "routes": [
-            { "method": "POST", "path": "/v1/responses" }
-          ],
-          "remove_headers": ["Authorization", "x-api-key"],
-          "credential": {
-            "environment": "XAI_API_KEY",
-            "header": "Authorization",
-            "prefix": "Bearer "
+        ]
+      },
+      {
+        "name": "xai",
+        "backends": [
+          { "type": "xai_subscription" },
+          {
+            "type": "http",
+            "upstreams": ["https://api.x.ai"],
+            "routes": [{ "method": "POST", "path": "/v1/responses" }],
+            "remove_headers": ["Authorization", "x-api-key"],
+            "credential": {
+              "environment": "XAI_API_KEY",
+              "header": "Authorization",
+              "prefix": "Bearer "
+            }
           }
-        }
-      ]
-    },
-    {
-      "name": "anthropic",
-      "address": "0.0.0.0:8789",
-      "backends": [
-        { "type": "anthropic_subscription" },
-        {
-          "type": "http",
-          "upstream": "https://api.anthropic.com",
-          "routes": [
-            { "method": "POST", "path": "/v1/messages" },
-            { "method": "POST", "path": "/v1/messages/count_tokens" }
-          ],
-          "remove_headers": ["Authorization", "x-api-key"],
-          "credential": {
-            "environment": "ANTHROPIC_API_KEY",
-            "header": "x-api-key",
-            "prefix": ""
+        ]
+      },
+      {
+        "name": "gemini",
+        "backends": [
+          {
+            "type": "http",
+            "upstreams": ["https://generativelanguage.googleapis.com"],
+            "routes": [
+              { "method": "POST", "path": "/v1beta/interactions" },
+              {
+                "method": "POST",
+                "path": "/v1beta/models/{model}:generateContent"
+              },
+              {
+                "method": "POST",
+                "path": "/v1beta/models/{model}:streamGenerateContent"
+              },
+              { "method": "POST", "path": "/v1beta/models/{model}:countTokens" }
+            ],
+            "remove_headers": ["Authorization", "x-goog-api-key"],
+            "remove_query_parameters": ["key"],
+            "credential": {
+              "environment": "GEMINI_API_KEY",
+              "header": "x-goog-api-key",
+              "prefix": ""
+            }
           }
-        }
-      ]
-    },
-    {
-      "name": "github",
-      "address": "0.0.0.0:8791",
-      "backends": [
-        {
-          "type": "https",
-          "upstreams": [
-            "https://github.com",
-            "https://api.github.com",
-            "https://uploads.github.com"
-          ],
-          "routes": [
-            { "method": "GET", "path": "/{path...}" },
-            { "method": "HEAD", "path": "/{path...}" },
-            { "method": "POST", "path": "/{path...}" },
-            { "method": "PUT", "path": "/{path...}" },
-            { "method": "PATCH", "path": "/{path...}" },
-            { "method": "DELETE", "path": "/{path...}" }
-          ],
-          "remove_headers": ["Authorization"],
-          "credential": {
-            "environment": "GITHUB_PAT",
-            "header": "Authorization",
-            "basic_username": "x-access-token"
+        ]
+      },
+      {
+        "name": "github",
+        "backends": [
+          {
+            "type": "http",
+            "upstreams": [
+              "https://github.com",
+              "https://api.github.com",
+              "https://uploads.github.com"
+            ],
+            "routes": [
+              { "method": "GET", "path": "/{path...}" },
+              { "method": "HEAD", "path": "/{path...}" },
+              { "method": "POST", "path": "/{path...}" },
+              { "method": "PUT", "path": "/{path...}" },
+              { "method": "PATCH", "path": "/{path...}" },
+              { "method": "DELETE", "path": "/{path...}" }
+            ],
+            "remove_headers": ["Authorization"],
+            "credential": {
+              "environment": "GITHUB_PAT",
+              "header": "Authorization",
+              "basic_username": "x-access-token"
+            }
           }
-        }
-      ]
-    }
-  ]
+        ]
+      }
+    ]
+  }
 }
