@@ -42,9 +42,13 @@ func TestHTTPSProxyInterceptsSanitizesAndForwards(t *testing.T) {
 	}
 
 	var got *http.Request
-	var observedMethod, observedPath string
-	var observedStatus int
-	var observedStarted time.Time
+	type observation struct {
+		method  string
+		path    string
+		status  int
+		started time.Time
+	}
+	observations := make(chan observation, 1)
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		got = request.Clone(request.Context())
 		w.WriteHeader(http.StatusCreated)
@@ -67,7 +71,7 @@ func TestHTTPSProxyInterceptsSanitizesAndForwards(t *testing.T) {
 		CredentialValue:       "Bearer real-token",
 		Authority:             authority,
 		Observe: func(method, path string, status int, started time.Time) {
-			observedMethod, observedPath, observedStatus, observedStarted = method, path, status, started
+			observations <- observation{method: method, path: path, status: status, started: started}
 		},
 	}, transport))
 	defer proxy.Close()
@@ -110,8 +114,16 @@ func TestHTTPSProxyInterceptsSanitizesAndForwards(t *testing.T) {
 	if got.URL.Query().Has("secret") || got.URL.Query().Get("safe") != "yes" {
 		t.Fatalf("upstream URL = %s", got.URL)
 	}
-	if observedMethod != http.MethodPost || observedPath != "/owner/repository/git-upload-pack" || observedStatus != http.StatusCreated || observedStarted.IsZero() {
-		t.Fatalf("observed request = %q %q %d at %v", observedMethod, observedPath, observedStatus, observedStarted)
+	// The proxy observes the request after flushing the response, so wait for
+	// the callback instead of racing it.
+	var observed observation
+	select {
+	case observed = <-observations:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request was not observed")
+	}
+	if observed.method != http.MethodPost || observed.path != "/owner/repository/git-upload-pack" || observed.status != http.StatusCreated || observed.started.IsZero() {
+		t.Fatalf("observed request = %q %q %d at %v", observed.method, observed.path, observed.status, observed.started)
 	}
 }
 
