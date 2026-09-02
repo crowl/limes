@@ -5,7 +5,6 @@ package egress
 
 import (
 	"bufio"
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -119,13 +118,13 @@ func intercept(w http.ResponseWriter, request *http.Request, authority, host str
 		return
 	}
 	defer tlsConnection.Close()
-	serveIntercepted(request.Context(), tlsConnection, authority, handler)
+	serveIntercepted(tlsConnection, authority, handler)
 }
 
 // serveIntercepted runs a standard HTTP server over the terminated tunnel so
 // claimed handlers see ordinary origin requests and keep-alive, chunked
 // bodies, and streaming behave as they do on a bound listener.
-func serveIntercepted(ctx context.Context, connection net.Conn, authority string, handler http.Handler) {
+func serveIntercepted(connection net.Conn, authority string, handler http.Handler) {
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 			if !matchesAuthority(request.Host, authority) {
@@ -136,7 +135,6 @@ func serveIntercepted(ctx context.Context, connection net.Conn, authority string
 		}),
 		ReadHeaderTimeout: interceptHeaderTimeout,
 		IdleTimeout:       interceptIdleTimeout,
-		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 	_ = server.Serve(newTunnelListener(connection))
 }

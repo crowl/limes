@@ -24,6 +24,9 @@ func TestInterceptsClaimedHostAndReusesTunnel(t *testing.T) {
 	var claims atomic.Int64
 	var paths []string
 	claimed := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if err := request.Context().Err(); err != nil {
+			t.Errorf("request %s context error = %v", request.URL.Path, err)
+		}
 		paths = append(paths, request.URL.Path)
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, "served "+request.Host)
