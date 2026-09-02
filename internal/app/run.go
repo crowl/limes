@@ -46,6 +46,15 @@ func runWithBind(ctx context.Context, args []string, getenv func(string) string,
 	}
 	providers := configureRuntimeProvidersWithRequestLog(cfg, getenv, logger, requests)
 	available := availableProviders(providers)
+	administered := providers
+	if cfg.Proxy != nil {
+		proxy, err := configureProxy(*cfg.Proxy, getenv, logger, requests)
+		if err != nil {
+			return err
+		}
+		available = append(available, proxy)
+		administered = append(administered, proxy.rules...)
+	}
 	if len(available) == 0 && cfg.Admin == nil {
 		return errors.New("no configured listener has an available backend")
 	}
@@ -55,7 +64,7 @@ func runWithBind(ctx context.Context, args []string, getenv func(string) string,
 		return err
 	}
 	if cfg.Admin != nil {
-		panel, err := newAdminPanel(cfg.Admin.Address, providers, requests, logger)
+		panel, err := newAdminPanel(cfg.Admin.Address, administered, requests, logger)
 		if err != nil {
 			closeListeners(running)
 			return err
@@ -126,9 +135,7 @@ func shutdownServers(running []runningProvider, timeout time.Duration, logger *s
 				shutdownErrors <- shutdownErr
 				return
 			}
-			if instance.provider.backends != nil {
-				instance.provider.backends.setListening(false)
-			}
+			setProviderListening(instance.provider, false)
 			shutdownErrors <- nil
 		}(instance)
 	}

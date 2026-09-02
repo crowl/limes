@@ -65,7 +65,7 @@ func TestRunKeepsAdminAvailableWhenAllBackendsAreUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "config.json")
-	contents := `{"admin":{"address":"` + adminAddress + `"},"listeners":[{"name":"unavailable","address":"127.0.0.1:8787","backends":[{"type":"http","upstream":"https://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"MISSING","header":"Authorization"}}]}]}`
+	contents := `{"admin":{"address":"` + adminAddress + `"},"listeners":[{"name":"unavailable","address":"127.0.0.1:8787","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"MISSING","header":"Authorization"}}]}]}`
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +90,8 @@ func TestRunKeepsAdminAvailableWhenAllBackendsAreUnavailable(t *testing.T) {
 func TestRunValidatesAllBackendsBeforeBinding(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	contents := `{"listeners":[` +
-		`{"name":"available","address":"127.0.0.1:1","backends":[{"type":"http","upstream":"http://example.test","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]},` +
-		`{"name":"invalid","address":"127.0.0.1:2","backends":[{"type":"http","upstream":"https://example.test:99999","routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}` +
+		`{"name":"available","address":"127.0.0.1:1","backends":[{"type":"http","upstreams":["http://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]},` +
+		`{"name":"invalid","address":"127.0.0.1:2","backends":[{"type":"http","upstreams":["https://example.test:99999"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}` +
 		`]}`
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
@@ -281,7 +281,7 @@ func testLogger() *slog.Logger {
 }
 
 func httpBackend(environment string) config.Backend {
-	return config.Backend{Type: "http", Upstream: "https://example.test", Routes: []config.Route{{Method: "POST", Path: "/x"}}, Credential: &config.Credential{Environment: environment, Header: "Authorization"}}
+	return config.Backend{Type: "http", Upstreams: []string{"https://example.test"}, Routes: []config.Route{{Method: "POST", Path: "/x"}}, Credential: &config.Credential{Environment: environment, Header: "Authorization"}}
 }
 
 func subscriptionTestJWT(account string) string {

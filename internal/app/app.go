@@ -13,9 +13,7 @@ import (
 	"time"
 
 	"github.com/crowl/limes/internal/anthropic"
-	"github.com/crowl/limes/internal/ca"
 	"github.com/crowl/limes/internal/config"
-	"github.com/crowl/limes/internal/httpsproxy"
 	"github.com/crowl/limes/internal/openai"
 	"github.com/crowl/limes/internal/proxy"
 	"github.com/crowl/limes/internal/xai"
@@ -24,9 +22,13 @@ import (
 type provider struct {
 	name     string
 	address  string
+	hosts    string
 	authMode string
 	handler  http.Handler
 	backends *backendSelector
+	// rules holds the proxy rules served through this provider's address.
+	// They are administered individually but share one listener.
+	rules []provider
 }
 
 type runningProvider struct {
@@ -86,11 +88,10 @@ func configureRuntimeProviders(cfg config.File, getenv func(string) string, logg
 
 func configureRuntimeProvidersWithRequestLog(cfg config.File, getenv func(string) string, logger *slog.Logger, requests *requestLog) []provider {
 	providers := make([]provider, 0, len(cfg.Listeners))
-	var authority *ca.Authority
 	for _, listenerConfig := range cfg.Listeners {
 		backends := make([]runtimeBackend, 0, len(listenerConfig.Backends))
 		for i, backendConfig := range listenerConfig.Backends {
-			backend, err := prepareBackend(i, backendConfig, getenv, &authority, requests, listenerConfig.Name)
+			backend, err := prepareBackend(i, backendConfig, getenv)
 			if err != nil {
 				logger.Warn("backend initialization failed",
 					"listener", listenerConfig.Name,
@@ -98,7 +99,7 @@ func configureRuntimeProvidersWithRequestLog(cfg config.File, getenv func(string
 					"error", err,
 				)
 			}
-			if requests != nil && backend.handler != nil && backend.typ != "https" {
+			if requests != nil && backend.handler != nil {
 				backend.handler = requests.wrap(listenerConfig.Name, backend.typ, backend.handler)
 			}
 			backends = append(backends, backend)
@@ -120,7 +121,7 @@ func configureRuntimeProvidersWithRequestLog(cfg config.File, getenv func(string
 	return providers
 }
 
-func prepareBackend(index int, backend config.Backend, getenv func(string) string, authority **ca.Authority, requests *requestLog, listener string) (runtimeBackend, error) {
+func prepareBackend(index int, backend config.Backend, getenv func(string) string) (runtimeBackend, error) {
 	result := runtimeBackend{index: index, typ: backend.Type, target: backendTarget(backend)}
 	switch backend.Type {
 	case "http":
@@ -129,27 +130,7 @@ func prepareBackend(index int, backend config.Backend, getenv func(string) strin
 			result.unavailable = "environment credential is not set"
 			return result, nil
 		}
-		handler, err := newHTTPProxy(backend, key)
-		if err != nil {
-			result.unavailable = "backend could not be initialized"
-			return result, err
-		}
-		result.handler = handler
-	case "https":
-		key := getenv(backend.Credential.Environment)
-		if key == "" {
-			result.unavailable = "environment credential is not set"
-			return result, nil
-		}
-		if *authority == nil {
-			loaded, err := ca.Load(getenv)
-			if err != nil {
-				result.unavailable = "local certificate authority is unavailable"
-				return result, fmt.Errorf("load Limes CA: %w", err)
-			}
-			*authority = loaded
-		}
-		handler, err := newHTTPSProxy(backend, key, *authority, requests, listener)
+		handler, err := newUpstreamProxy(backend, key)
 		if err != nil {
 			result.unavailable = "backend could not be initialized"
 			return result, err
@@ -204,11 +185,6 @@ func backendTarget(backend config.Backend) string {
 	case "xai_subscription":
 		return "xAI subscription"
 	case "http":
-		upstream, err := url.Parse(backend.Upstream)
-		if err == nil {
-			return upstream.Host
-		}
-	case "https":
 		hosts := make([]string, 0, len(backend.Upstreams))
 		for _, value := range backend.Upstreams {
 			upstream, err := url.Parse(value)
@@ -332,9 +308,7 @@ func bindProvidersWithListener(p []provider, listen func(string, string) (net.Li
 			closeListeners(out)
 			return nil, fmt.Errorf("listen for %s on %s: %w", x.name, x.address, err)
 		}
-		if x.backends != nil {
-			x.backends.setListening(true)
-		}
+		setProviderListening(x, true)
 		out = append(out, runningProvider{x, listener, &http.Server{
 			Addr:              x.address,
 			Handler:           x.handler,
@@ -348,70 +322,72 @@ func bindProvidersWithListener(p []provider, listen func(string, string) (net.Li
 
 func closeListeners(running []runningProvider) {
 	for _, instance := range running {
-		if instance.provider.backends != nil {
-			instance.provider.backends.setListening(false)
-		}
+		setProviderListening(instance.provider, false)
 		_ = instance.listener.Close()
 	}
 }
 
-func newHTTPSProxy(backend config.Backend, key string, authority *ca.Authority, requests *requestLog, listener string) (http.Handler, error) {
-	upstreams := make(map[string]*url.URL, len(backend.Upstreams))
+func setProviderListening(p provider, listening bool) {
+	if p.backends != nil {
+		p.backends.setListening(listening)
+	}
+	for _, rule := range p.rules {
+		rule.backends.setListening(listening)
+	}
+}
+
+// newUpstreamProxy builds the credential-injecting reverse proxy for a backend.
+// A backend serving several hosts selects among them by request host, which the
+// proxy listener has already matched against the CONNECT authority.
+func newUpstreamProxy(backend config.Backend, key string) (http.Handler, error) {
+	hosts := make(map[string]http.Handler, len(backend.Upstreams))
+	var single http.Handler
 	for _, value := range backend.Upstreams {
 		upstream, err := url.Parse(value)
 		if err != nil {
 			return nil, err
 		}
-		host := strings.ToLower(upstream.Hostname())
-		authorityName := net.JoinHostPort(host, "443")
-		upstreams[authorityName] = upstream
+		handler := proxy.New(proxy.Backend{
+			Upstream:              upstream,
+			Allowed:               routeMatcher(backend.Routes),
+			RemoveHeaders:         backend.RemoveHeaders,
+			RemoveQueryParameters: backend.RemoveQueryParameters,
+			CredentialHeader:      backend.Credential.Header,
+			CredentialValue:       credentialValue(backend.Credential, key),
+		})
+		hosts[strings.ToLower(upstream.Hostname())] = handler
+		single = handler
 	}
-	allowed := func(method, path string) bool {
-		for _, route := range backend.Routes {
-			if route.Method == method && route.Pattern.Matches(path) {
-				return true
-			}
+	if len(hosts) == 1 {
+		return single, nil
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		handler := hosts[strings.ToLower(requestHostname(request))]
+		if handler == nil {
+			http.Error(w, "upstream not allowed", http.StatusForbidden)
+			return
 		}
-		return false
-	}
-	configured := httpsproxy.Backend{
-		Upstreams:             upstreams,
-		Allowed:               allowed,
-		RemoveHeaders:         backend.RemoveHeaders,
-		RemoveQueryParameters: backend.RemoveQueryParameters,
-		CredentialHeader:      backend.Credential.Header,
-		CredentialValue:       credentialValue(backend.Credential, key),
-		Authority:             authority,
-	}
-	if requests != nil {
-		configured.Observe = func(method, path string, status int, started time.Time) {
-			requests.observe(listener, "https", method, path, status, started)
-		}
-	}
-	return httpsproxy.New(configured), nil
+		handler.ServeHTTP(w, request)
+	}), nil
 }
 
-func newHTTPProxy(backend config.Backend, key string) (http.Handler, error) {
-	target, err := url.Parse(backend.Upstream)
+func requestHostname(request *http.Request) string {
+	host, _, err := net.SplitHostPort(request.Host)
 	if err != nil {
-		return nil, err
+		host = request.Host
 	}
-	allowed := func(method, path string) bool {
-		for _, route := range backend.Routes {
+	return strings.TrimSuffix(host, ".")
+}
+
+func routeMatcher(routes []config.Route) proxy.Route {
+	return func(method, path string) bool {
+		for _, route := range routes {
 			if route.Method == method && route.Pattern.Matches(path) {
 				return true
 			}
 		}
 		return false
 	}
-	return proxy.New(proxy.Backend{
-		Upstream:              target,
-		Allowed:               allowed,
-		RemoveHeaders:         backend.RemoveHeaders,
-		RemoveQueryParameters: backend.RemoveQueryParameters,
-		CredentialHeader:      backend.Credential.Header,
-		CredentialValue:       credentialValue(backend.Credential, key),
-	}), nil
 }
 
 func credentialValue(credential *config.Credential, key string) string {

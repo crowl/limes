@@ -45,6 +45,7 @@ type adminRequest struct {
 type adminListener struct {
 	Name      string
 	Address   string
+	Hosts     string
 	Listening bool
 	Backends  []backendSnapshot
 }
@@ -112,6 +113,7 @@ func (panel *adminPanel) listenersPage(w http.ResponseWriter) {
 		listeners = append(listeners, adminListener{
 			Name:      provider.name,
 			Address:   provider.address,
+			Hosts:     provider.hosts,
 			Listening: listening,
 			Backends:  backends,
 		})
@@ -604,7 +606,7 @@ button:focus-visible {
 <header class="listener-header">
 <div>
 <h2>{{.Name}}</h2>
-<p class="address">{{.Address}}</p>
+<p class="address">{{if .Hosts}}{{.Hosts}}{{else}}{{.Address}}{{end}}</p>
 </div>
 <span class="listener-state {{if .Listening}}is-listening{{end}}">{{if .Listening}}listening{{else}}not listening{{end}}</span>
 </header>
