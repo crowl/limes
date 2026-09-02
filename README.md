@@ -223,13 +223,32 @@ or `https` backend is available when its credential environment variable is
 nonempty.
 
 The built-in subscription backends are available when Limes finds valid
-credentials from the corresponding official CLI login:
+credentials from the corresponding official CLI login. They use consumer
+subscription authority rather than API billing and accept no additional
+configuration fields.
+
+`anthropic_subscription` uses the official Claude Code login and exposes the
+native Anthropic Messages endpoint at `POST /v1/messages`:
+
+```json
+{ "type": "anthropic_subscription" }
+```
+
+On macOS it first reads the `Claude Code-credentials` Keychain item. If that item
+is unavailable, and on other platforms, it reads
+`$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`. Run
+`claude` and complete its login before starting Limes. Limes refreshes expiring
+OAuth credentials and writes them back to the store from which they were read.
+It preserves the caller's native Messages fields and model, adds the Claude Code
+request attribution required by Anthropic's subscription endpoint, and supports
+streaming responses. It does not expose `/v1/messages/count_tokens`.
+
+`openai_subscription` uses local Codex or ChatGPT subscription credentials:
 
 ```json
 { "type": "openai_subscription" }
 ```
 
-`openai_subscription` uses local Codex or ChatGPT subscription credentials.
 `xai_subscription` uses the official Grok CLI login from `$GROK_HOME/auth.json`
 or `~/.grok/auth.json` and exposes `POST /v1/responses` through xAI's CLI proxy:
 
@@ -239,6 +258,11 @@ or `~/.grok/auth.json` and exposes `POST /v1/responses` through xAI's CLI proxy:
 
 The xAI backend reads the request's required `model` field to select the upstream
 model. Run `grok login` before starting Limes if no Grok login exists.
+
+The Anthropic subscription integration relies on Claude Code's consumer OAuth
+protocol and credential format. These are maintained by Anthropic's official
+client but are less stable than its public API-key contract and may require Limes
+updates when Claude Code changes.
 
 A listener is disabled when none of its backends are available. Startup fails if
 every listener is disabled. Selected backends do not change while Limes is

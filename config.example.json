@@ -81,6 +81,7 @@
       "name": "anthropic",
       "address": "0.0.0.0:8789",
       "backends": [
+        { "type": "anthropic_subscription" },
         {
           "type": "http",
           "upstream": "https://api.anthropic.com",
