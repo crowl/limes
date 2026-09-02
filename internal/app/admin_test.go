@@ -120,7 +120,7 @@ func TestAdminPanelDisplaysStatusAndSwitchesBackend(t *testing.T) {
 
 	form := url.Values{
 		"csrf_token": {panel.csrfToken},
-		"listener":   {"openai"},
+		"rule":       {"openai"},
 		"backend":    {"1"},
 	}
 	response = httptest.NewRecorder()
@@ -142,7 +142,7 @@ func TestAdminPanelDisplaysRequestLog(t *testing.T) {
 	requests := newRequestLog()
 	requests.record(requestEntry{
 		CompletedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.Local),
-		Listener:    "one",
+		Rule:        "one",
 		Backend:     "http",
 		Method:      http.MethodGet,
 		Path:        "/safe/path",
@@ -157,7 +157,7 @@ func TestAdminPanelDisplaysRequestLog(t *testing.T) {
 	response := httptest.NewRecorder()
 	panel.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8799/", nil))
 	if strings.Contains(response.Body.String(), "/safe/path") || strings.Contains(response.Body.String(), "Recent requests") {
-		t.Fatalf("listeners page contains request log: %q", response.Body.String())
+		t.Fatalf("rules page contains request log: %q", response.Body.String())
 	}
 
 	response = httptest.NewRecorder()
@@ -298,7 +298,7 @@ func TestAdminPanelRejectsInvalidHostOriginAndToken(t *testing.T) {
 		"token":  {origin: "http://localhost:8799", token: "wrong"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			form := url.Values{"csrf_token": {testCase.token}, "listener": {"one"}, "backend": {"0"}}
+			form := url.Values{"csrf_token": {testCase.token}, "rule": {"one"}, "backend": {"0"}}
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "http://localhost:8799/switch", strings.NewReader(form.Encode()))
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -311,26 +311,22 @@ func TestAdminPanelRejectsInvalidHostOriginAndToken(t *testing.T) {
 	}
 }
 
-func configFileWithHTTPBackends() config.File {
-	return config.File{Listeners: []config.Listener{{
-		Name: "one", Address: "127.0.0.1:8787", Backends: []config.Backend{
-			httpBackend("MISSING"),
-			httpBackend("AVAILABLE"),
-		},
-	}}}
-}
-
-func TestConfigureRuntimeProvidersRetainsUnavailableBackends(t *testing.T) {
-	providers := configureRuntimeProviders(configFileWithHTTPBackends(), func(name string) string {
-		if name == "AVAILABLE" {
-			return "secret"
-		}
-		return ""
-	}, testLogger())
-	if len(providers) != 1 {
-		t.Fatalf("providers = %#v", providers)
+func TestConfigureProxyRetainsUnavailableBackends(t *testing.T) {
+	getenv, _ := proxyEnvironment(t, map[string]string{"AVAILABLE": "secret"})
+	configured, err := configureProxy(config.Proxy{
+		Address: "127.0.0.1:0",
+		Rules: []config.Rule{{
+			Name: "one",
+			Backends: []config.Backend{
+				httpBackend("MISSING"),
+				httpBackend("AVAILABLE"),
+			},
+		}},
+	}, getenv, testLogger(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	backends, _ := providers[0].backends.snapshots()
+	backends, _ := configured.rules[0].backends.snapshots()
 	if len(backends) != 2 || backends[0].Available || backends[0].Unavailable != "environment credential is not set" || !backends[1].Available || !backends[1].Active {
 		t.Fatalf("backends = %#v", backends)
 	}

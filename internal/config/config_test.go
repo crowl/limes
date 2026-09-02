@@ -9,7 +9,7 @@ import (
 
 func TestLoadUnreadableFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	contents := `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`
+	contents := validConfigJSON()
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestResolvePath(t *testing.T) {
 
 func TestLoadRejectsInvalidMethodsAddressesAndUpstreams(t *testing.T) {
 	valid := func(upstream, method, address string) string {
-		return `{"listeners":[{"name":"one","address":"` + address + `","backends":[{"type":"http","upstreams":["` + upstream + `"],"routes":[{"method":"` + method + `","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`
+		return `{"proxy":{"address":"` + address + `","rules":[{"name":"one","backends":[{"type":"http","upstreams":["` + upstream + `"],"routes":[{"method":"` + method + `","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}}`
 	}
 	for name, document := range map[string]string{
 		"non_ascii_method": valid("https://example.test", "ſ", "127.0.0.1:1"),

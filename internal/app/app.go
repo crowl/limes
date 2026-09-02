@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,9 +25,7 @@ type provider struct {
 	authMode string
 	handler  http.Handler
 	backends *backendSelector
-	// rules holds the proxy rules served through this provider's address.
-	// They are administered individually but share one listener.
-	rules []provider
+	rules    []provider
 }
 
 type runningProvider struct {
@@ -59,66 +56,6 @@ type backendSnapshot struct {
 	Available   bool
 	Active      bool
 	Unavailable string
-}
-
-// selectProviders retains the original startup-only selection path for focused
-// compatibility tests. The application runtime uses configureRuntimeProviders.
-func selectProviders(cfg config.File, getenv func(string) string, logger *slog.Logger) ([]provider, error) {
-	configured := configureRuntimeProviders(cfg, getenv, logger)
-	out := make([]provider, 0, len(configured))
-	for _, candidate := range configured {
-		active, available := candidate.backends.activeBackend()
-		if !available {
-			continue
-		}
-		candidate.authMode = active.typ
-		candidate.handler = active.handler
-		candidate.backends = nil
-		out = append(out, candidate)
-	}
-	if len(out) == 0 {
-		return nil, errors.New("no configured listener has an available backend")
-	}
-	return out, nil
-}
-
-func configureRuntimeProviders(cfg config.File, getenv func(string) string, logger *slog.Logger) []provider {
-	return configureRuntimeProvidersWithRequestLog(cfg, getenv, logger, nil)
-}
-
-func configureRuntimeProvidersWithRequestLog(cfg config.File, getenv func(string) string, logger *slog.Logger, requests *requestLog) []provider {
-	providers := make([]provider, 0, len(cfg.Listeners))
-	for _, listenerConfig := range cfg.Listeners {
-		backends := make([]runtimeBackend, 0, len(listenerConfig.Backends))
-		for i, backendConfig := range listenerConfig.Backends {
-			backend, err := prepareBackend(i, backendConfig, getenv)
-			if err != nil {
-				logger.Warn("backend initialization failed",
-					"listener", listenerConfig.Name,
-					"backend", backend.typ,
-					"error", err,
-				)
-			}
-			if requests != nil && backend.handler != nil {
-				backend.handler = requests.wrap(listenerConfig.Name, backend.typ, backend.handler)
-			}
-			backends = append(backends, backend)
-		}
-		selector := newBackendSelector(backends)
-		active, ok := selector.activeBackend()
-		if !ok {
-			logger.Info("listener disabled", "listener", listenerConfig.Name, "reason", "no backend credentials available")
-		} else {
-			logger.Info("backend selected", "listener", listenerConfig.Name, "backend", active.typ)
-		}
-		providers = append(providers, provider{
-			name:     listenerConfig.Name,
-			address:  listenerConfig.Address,
-			handler:  selector,
-			backends: selector,
-		})
-	}
-	return providers
 }
 
 func prepareBackend(index int, backend config.Backend, getenv func(string) string) (runtimeBackend, error) {
@@ -276,21 +213,6 @@ func snapshotBackend(backend runtimeBackend, active bool) backendSnapshot {
 	}
 }
 
-func availableProviders(providers []provider) []provider {
-	available := make([]provider, 0, len(providers))
-	for _, provider := range providers {
-		if provider.backends == nil {
-			available = append(available, provider)
-			continue
-		}
-		if active, ok := provider.backends.activeBackend(); ok {
-			provider.authMode = active.typ
-			available = append(available, provider)
-		}
-	}
-	return available
-}
-
 func bindProviders(p []provider) ([]runningProvider, error) {
 	return bindProvidersWithListener(p, net.Listen)
 }
@@ -338,7 +260,7 @@ func setProviderListening(p provider, listening bool) {
 
 // newUpstreamProxy builds the credential-injecting reverse proxy for a backend.
 // A backend serving several hosts selects among them by request host, which the
-// proxy listener has already matched against the CONNECT authority.
+// egress proxy has already matched against the CONNECT authority.
 func newUpstreamProxy(backend config.Backend, key string) (http.Handler, error) {
 	hosts := make(map[string]http.Handler, len(backend.Upstreams))
 	var single http.Handler

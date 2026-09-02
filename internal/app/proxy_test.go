@@ -53,7 +53,7 @@ func TestProxyInterceptsClaimedHostAndAppliesRuleRoutes(t *testing.T) {
 		t.Fatalf("request log entries = %d", len(entries))
 	}
 	entry := entries[0]
-	if entry.Listener != "github" || entry.Backend != "http" || entry.Path != "/repos/owner/name" || entry.Status != http.StatusForbidden {
+	if entry.Rule != "github" || entry.Backend != "http" || entry.Path != "/repos/owner/name" || entry.Status != http.StatusForbidden {
 		t.Fatalf("request log entry = %#v", entry)
 	}
 }

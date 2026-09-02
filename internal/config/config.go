@@ -25,9 +25,8 @@ type Options struct {
 }
 
 type File struct {
-	Admin     *Admin     `json:"admin,omitempty"`
-	Proxy     *Proxy     `json:"proxy,omitempty"`
-	Listeners []Listener `json:"listeners,omitempty"`
+	Admin *Admin `json:"admin,omitempty"`
+	Proxy *Proxy `json:"proxy"`
 }
 
 type Admin struct {
@@ -51,12 +50,6 @@ const (
 
 type Rule struct {
 	Name     string    `json:"name"`
-	Backends []Backend `json:"backends"`
-}
-
-type Listener struct {
-	Name     string    `json:"name"`
-	Address  string    `json:"address"`
 	Backends []Backend `json:"backends"`
 }
 
@@ -155,9 +148,6 @@ func Load(path string) (File, error) {
 				Backends []map[string]json.RawMessage `json:"backends"`
 			} `json:"rules"`
 		} `json:"proxy"`
-		Listeners []struct {
-			Backends []map[string]json.RawMessage `json:"backends"`
-		} `json:"listeners"`
 	}
 	rawDecoder := json.NewDecoder(bytes.NewReader(contents))
 	if err := rawDecoder.Decode(&raw); err != nil {
@@ -169,10 +159,7 @@ func Load(path string) (File, error) {
 		}
 		return File{}, fmt.Errorf("trailing configuration content: %w", err)
 	}
-	backendGroups := make([][]map[string]json.RawMessage, 0, len(raw.Listeners))
-	for _, listener := range raw.Listeners {
-		backendGroups = append(backendGroups, listener.Backends)
-	}
+	var backendGroups [][]map[string]json.RawMessage
 	if raw.Proxy != nil {
 		for _, rule := range raw.Proxy.Rules {
 			backendGroups = append(backendGroups, rule.Backends)
@@ -281,10 +268,9 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var tokenName = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 
 func validateFile(cfg *File) error {
-	if len(cfg.Listeners) == 0 && cfg.Proxy == nil {
-		return errors.New("listeners must not be empty")
+	if cfg.Proxy == nil {
+		return errors.New("proxy is required")
 	}
-	names := map[string]bool{}
 	addresses := map[string]bool{}
 	if cfg.Admin != nil {
 		if err := validateAdmin(cfg.Admin); err != nil {
@@ -292,46 +278,16 @@ func validateFile(cfg *File) error {
 		}
 		addresses[normalizedAddress(cfg.Admin.Address)] = true
 	}
-	if cfg.Proxy != nil {
-		if err := validateProxy(cfg.Proxy, names, addresses); err != nil {
-			return err
-		}
-	}
-	for i := range cfg.Listeners {
-		l := &cfg.Listeners[i]
-		if l.Name == "" || names[l.Name] {
-			return fmt.Errorf("invalid or duplicate listener name %q", l.Name)
-		}
-		names[l.Name] = true
-		if err := validateListenAddress(l.Address, fmt.Sprintf("listener %q", l.Name)); err != nil {
-			return err
-		}
-		addressKey := normalizedAddress(l.Address)
-		if addresses[addressKey] {
-			return fmt.Errorf("duplicate listener address %q", l.Address)
-		}
-		addresses[addressKey] = true
-		if len(l.Backends) == 0 {
-			return fmt.Errorf("listener %q has no backends", l.Name)
-		}
-		for j := range l.Backends {
-			if err := validateBackend(&l.Backends[j], originBackend); err != nil {
-				return fmt.Errorf("listener %q backend %d: %w", l.Name, j, err)
-			}
-		}
-	}
-	return nil
+	return validateProxy(cfg.Proxy, addresses)
 }
 
-// validateProxy shares the listener name space so the admin panel and request
-// log identify every rule and listener unambiguously.
-func validateProxy(proxy *Proxy, names, addresses map[string]bool) error {
+func validateProxy(proxy *Proxy, addresses map[string]bool) error {
 	if err := validateListenAddress(proxy.Address, "proxy"); err != nil {
 		return err
 	}
 	addressKey := normalizedAddress(proxy.Address)
 	if addresses[addressKey] {
-		return fmt.Errorf("duplicate listener address %q", proxy.Address)
+		return fmt.Errorf("proxy address %q conflicts with admin address", proxy.Address)
 	}
 	addresses[addressKey] = true
 	switch proxy.Unclaimed {
@@ -344,6 +300,7 @@ func validateProxy(proxy *Proxy, names, addresses map[string]bool) error {
 	if len(proxy.Rules) == 0 {
 		return errors.New("proxy rules must not be empty")
 	}
+	names := map[string]bool{}
 	for i := range proxy.Rules {
 		rule := &proxy.Rules[i]
 		if rule.Name == "" || names[rule.Name] {
@@ -354,7 +311,7 @@ func validateProxy(proxy *Proxy, names, addresses map[string]bool) error {
 			return fmt.Errorf("proxy rule %q has no backends", rule.Name)
 		}
 		for j := range rule.Backends {
-			if err := validateBackend(&rule.Backends[j], claimedBackend); err != nil {
+			if err := validateBackend(&rule.Backends[j]); err != nil {
 				return fmt.Errorf("proxy rule %q backend %d: %w", rule.Name, j, err)
 			}
 		}
@@ -411,16 +368,7 @@ func normalizedAddress(address string) string {
 	return net.JoinHostPort(host, port)
 }
 
-// backendUse distinguishes a backend bound to a listener address from one whose
-// upstream host is claimed by the proxy and reached by intercepting its TLS.
-type backendUse int
-
-const (
-	originBackend backendUse = iota
-	claimedBackend
-)
-
-func validateBackend(b *Backend, use backendUse) error {
+func validateBackend(b *Backend) error {
 	if b.Type == "anthropic_subscription" || b.Type == "openai_subscription" || b.Type == "xai_subscription" {
 		if len(b.Upstreams) > 0 || len(b.Routes) > 0 || len(b.RemoveHeaders) > 0 || len(b.RemoveQueryParameters) > 0 || b.Credential != nil {
 			return fmt.Errorf("%s does not accept additional fields", b.Type)
@@ -433,14 +381,9 @@ func validateBackend(b *Backend, use backendUse) error {
 	if len(b.Upstreams) == 0 {
 		return errors.New("upstreams must not be empty")
 	}
-	// An origin listener has no Host to route on, so a second upstream would
-	// be unreachable. A claimed host is selected by the CONNECT authority.
-	if use == originBackend && len(b.Upstreams) > 1 {
-		return errors.New("a listener backend accepts exactly one upstream; use a proxy rule to serve several hosts")
-	}
 	hosts := map[string]bool{}
 	for _, upstream := range b.Upstreams {
-		if err := validateUpstream(upstream, use); err != nil {
+		if err := validateUpstream(upstream); err != nil {
 			return err
 		}
 		parsed, _ := url.Parse(upstream)
@@ -503,7 +446,7 @@ func validateBackend(b *Backend, use backendUse) error {
 	return nil
 }
 
-func validateUpstream(value string, use backendUse) error {
+func validateUpstream(value string) error {
 	const malformed = "upstreams must contain absolute http or https URLs without userinfo, query, or fragment"
 	u, err := url.Parse(value)
 	if err != nil {
@@ -515,7 +458,7 @@ func validateUpstream(value string, use backendUse) error {
 	}
 	// The proxy issues a certificate for each claimed host, which requires a
 	// name a client can present in SNI.
-	if use == claimedBackend && net.ParseIP(u.Hostname()) != nil {
+	if net.ParseIP(u.Hostname()) != nil {
 		return errors.New("a claimed upstream must use a DNS hostname")
 	}
 	if hasExplicitPort(u) {

@@ -17,7 +17,7 @@ const (
 
 type requestEntry struct {
 	CompletedAt time.Time
-	Listener    string
+	Rule        string
 	Backend     string
 	Method      string
 	Path        string
@@ -69,11 +69,11 @@ func (log *requestLog) snapshots() []requestEntry {
 	return entries
 }
 
-func (log *requestLog) observe(listener, backend, method, path string, status int, started time.Time) {
+func (log *requestLog) observe(rule, backend, method, path string, status int, started time.Time) {
 	completedAt := log.now()
 	log.record(requestEntry{
 		CompletedAt: completedAt,
-		Listener:    listener,
+		Rule:        rule,
 		Backend:     backend,
 		Method:      method,
 		Path:        truncateRequestPath(path),
@@ -93,12 +93,12 @@ func truncateRequestPath(path string) string {
 	return path[:end] + truncatedPathSuffix
 }
 
-func (log *requestLog) wrap(listener, backend string, handler http.Handler) http.Handler {
+func (log *requestLog) wrap(rule, backend string, handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		started := log.now()
 		response := &statusResponseWriter{ResponseWriter: w}
 		handler.ServeHTTP(response, request)
-		log.observe(listener, backend, request.Method, request.URL.Path, response.statusCode(), started)
+		log.observe(rule, backend, request.Method, request.URL.Path, response.statusCode(), started)
 	})
 }
 

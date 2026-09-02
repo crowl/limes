@@ -44,27 +44,16 @@ func runWithBind(ctx context.Context, args []string, getenv func(string) string,
 	if cfg.Admin != nil {
 		requests = newRequestLog()
 	}
-	providers := configureRuntimeProvidersWithRequestLog(cfg, getenv, logger, requests)
-	available := availableProviders(providers)
-	administered := providers
-	if cfg.Proxy != nil {
-		proxy, err := configureProxy(*cfg.Proxy, getenv, logger, requests)
-		if err != nil {
-			return err
-		}
-		available = append(available, proxy)
-		administered = append(administered, proxy.rules...)
+	proxy, err := configureProxy(*cfg.Proxy, getenv, logger, requests)
+	if err != nil {
+		return err
 	}
-	if len(available) == 0 && cfg.Admin == nil {
-		return errors.New("no configured listener has an available backend")
-	}
-
-	running, err := bind(available)
+	running, err := bind([]provider{proxy})
 	if err != nil {
 		return err
 	}
 	if cfg.Admin != nil {
-		panel, err := newAdminPanel(cfg.Admin.Address, administered, requests, logger)
+		panel, err := newAdminPanel(cfg.Admin.Address, proxy.rules, requests, logger)
 		if err != nil {
 			closeListeners(running)
 			return err
@@ -89,14 +78,11 @@ func serveRunning(ctx context.Context, running []runningProvider, logger *slog.L
 		if instance.provider.authMode == "admin" {
 			logger.Info("admin panel listening", "address", instance.listener.Addr().String())
 		} else {
-			logger.Info("provider proxy listening",
-				"provider", instance.provider.name,
+			logger.Info("proxy listening",
 				"address", instance.listener.Addr().String(),
-				"auth", instance.provider.authMode,
 			)
 			if !isLoopbackAddress(instance.provider.address) {
-				logger.Warn("listener is reachable beyond loopback; Limes does not authenticate incoming clients, so do not expose it to untrusted networks",
-					"provider", instance.provider.name,
+				logger.Warn("proxy is reachable beyond loopback; Limes does not authenticate clients, so do not expose it to untrusted networks",
 					"address", instance.provider.address,
 				)
 			}

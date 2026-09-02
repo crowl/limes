@@ -10,7 +10,7 @@ import (
 
 func TestLoadValidatesExplicitUpstreamPortsAndIPv6(t *testing.T) {
 	valid := func(upstream string) string {
-		return `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"http","upstreams":["` + upstream + `"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`
+		return `{"proxy":{"address":"127.0.0.1:1","rules":[{"name":"one","backends":[{"type":"http","upstreams":["` + upstream + `"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}}`
 	}
 	cases := []struct {
 		name     string
@@ -25,8 +25,8 @@ func TestLoadValidatesExplicitUpstreamPortsAndIPv6(t *testing.T) {
 		{"negative", "https://example.test:-1", true},
 		{"malformed", "https://example.test:abc", true},
 		{"empty", "https://example.test:", true},
-		{"IPv6 no port", "https://[::1]", false},
-		{"IPv6 port", "https://[::1]:443", false},
+		{"IPv6 no port", "https://[::1]", true},
+		{"IPv6 port", "https://[::1]:443", true},
 		{"invalid IPv6 authority", "https://::1", true},
 	}
 	for _, testCase := range cases {

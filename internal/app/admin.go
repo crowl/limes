@@ -27,14 +27,14 @@ type adminPanel struct {
 
 type adminPage struct {
 	CSRFToken    string
-	Listeners    []adminListener
+	Rules        []adminRule
 	Requests     []adminRequest
 	RequestsPage bool
 }
 
 type adminRequest struct {
 	Time     string
-	Listener string
+	Rule     string
 	Backend  string
 	Method   string
 	Path     string
@@ -42,7 +42,7 @@ type adminRequest struct {
 	Duration string
 }
 
-type adminListener struct {
+type adminRule struct {
 	Name      string
 	Address   string
 	Hosts     string
@@ -91,7 +91,7 @@ func (panel *adminPanel) ServeHTTP(w http.ResponseWriter, request *http.Request)
 			panel.requestsPage(w)
 			return
 		}
-		panel.listenersPage(w)
+		panel.rulesPage(w)
 		return
 	case "/switch":
 		if request.Method != http.MethodPost {
@@ -106,11 +106,11 @@ func (panel *adminPanel) ServeHTTP(w http.ResponseWriter, request *http.Request)
 	}
 }
 
-func (panel *adminPanel) listenersPage(w http.ResponseWriter) {
-	listeners := make([]adminListener, 0, len(panel.ordered))
+func (panel *adminPanel) rulesPage(w http.ResponseWriter) {
+	rules := make([]adminRule, 0, len(panel.ordered))
 	for _, provider := range panel.ordered {
 		backends, listening := provider.backends.snapshots()
-		listeners = append(listeners, adminListener{
+		rules = append(rules, adminRule{
 			Name:      provider.name,
 			Address:   provider.address,
 			Hosts:     provider.hosts,
@@ -118,7 +118,7 @@ func (panel *adminPanel) listenersPage(w http.ResponseWriter) {
 			Backends:  backends,
 		})
 	}
-	panel.render(w, adminPage{CSRFToken: panel.csrfToken, Listeners: listeners})
+	panel.render(w, adminPage{CSRFToken: panel.csrfToken, Rules: rules})
 }
 
 func (panel *adminPanel) requestsPage(w http.ResponseWriter) {
@@ -129,7 +129,7 @@ func (panel *adminPanel) requestsPage(w http.ResponseWriter) {
 		for i, entry := range entries {
 			requests[i] = adminRequest{
 				Time:     entry.CompletedAt.Local().Format("2006-01-02 15:04:05"),
-				Listener: entry.Listener,
+				Rule:     entry.Rule,
 				Backend:  entry.Backend,
 				Method:   entry.Method,
 				Path:     entry.Path,
@@ -174,9 +174,9 @@ func (panel *adminPanel) switchBackend(w http.ResponseWriter, request *http.Requ
 		http.Error(w, "invalid form token", http.StatusForbidden)
 		return
 	}
-	provider, ok := panel.providers[request.PostForm.Get("listener")]
+	provider, ok := panel.providers[request.PostForm.Get("rule")]
 	if !ok || provider.backends == nil {
-		http.Error(w, "listener does not exist", http.StatusNotFound)
+		http.Error(w, "rule does not exist", http.StatusNotFound)
 		return
 	}
 	index, err := strconv.Atoi(request.PostForm.Get("backend"))
@@ -186,11 +186,11 @@ func (panel *adminPanel) switchBackend(w http.ResponseWriter, request *http.Requ
 	}
 	selected, err := provider.backends.switchTo(index)
 	if err != nil {
-		panel.logger.Warn("backend switch rejected", "listener", provider.name, "reason", err)
+		panel.logger.Warn("backend switch rejected", "rule", provider.name, "reason", err)
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	panel.logger.Info("backend switched", "listener", provider.name, "backend", selected.Type)
+	panel.logger.Info("backend switched", "rule", provider.name, "backend", selected.Type)
 	http.Redirect(w, request, "/", http.StatusSeeOther)
 }
 
@@ -253,7 +253,7 @@ const adminHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .RequestsPage}}Request log{{else}}Listeners{{end}} · Limes admin</title>
+<title>{{if .RequestsPage}}Request log{{else}}Rules{{end}} · Limes admin</title>
 <style>
 :root {
   color-scheme: light dark;
@@ -337,7 +337,7 @@ h1 {
   outline: 2px solid var(--foreground);
   outline-offset: 3px;
 }
-.listeners { display: grid; gap: 1.25rem; }
+.rules { display: grid; gap: 1.25rem; }
 .request-log { margin: 0; }
 .section-heading {
   display: flex;
@@ -373,13 +373,13 @@ h1 {
   color: var(--muted);
   text-align: center;
 }
-.listener {
+.rule {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: .75rem;
   background: var(--surface);
 }
-.listener-header {
+.rule-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -387,7 +387,7 @@ h1 {
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border);
 }
-.listener h2 {
+.rule h2 {
   margin: 0 0 .2rem;
   font-size: 1.0625rem;
   font-weight: 600;
@@ -399,7 +399,7 @@ h1 {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: .75rem;
 }
-.listener-state {
+.rule-state {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -409,15 +409,15 @@ h1 {
   font-weight: 600;
   letter-spacing: .02em;
 }
-.listener-state::before {
+.rule-state::before {
   width: .45rem;
   height: .45rem;
   border: 1px solid currentColor;
   border-radius: 50%;
   content: "";
 }
-.listener-state.is-listening { color: var(--foreground); }
-.listener-state.is-listening::before { background: currentColor; }
+.rule-state.is-listening { color: var(--foreground); }
+.rule-state.is-listening::before { background: currentColor; }
 .table-wrap { overflow-x: auto; }
 table {
   width: 100%;
@@ -514,7 +514,7 @@ button:focus-visible {
   .masthead { display: block; margin-bottom: 1.5rem; }
   .intro { margin-top: 1rem; text-align: left; }
   .page-nav { margin-bottom: 2rem; }
-  .listener-header { align-items: flex-start; padding: 1rem; }
+  .rule-header { align-items: flex-start; padding: 1rem; }
   .section-heading { display: block; }
   .section-heading p { margin-top: .35rem; }
   thead { display: none; }
@@ -560,10 +560,10 @@ button:focus-visible {
 <p class="eyebrow">Admin console</p>
 <h1>Limes</h1>
 </div>
-{{if not .RequestsPage}}<p class="intro">Inspect listeners and select the backend used for new requests.</p>{{end}}
+{{if not .RequestsPage}}<p class="intro">Inspect proxy rules and select the backend used for new requests.</p>{{end}}
 </header>
 <nav class="page-nav" aria-label="Admin pages">
-<a href="/"{{if not .RequestsPage}} aria-current="page"{{end}}>Listeners</a>
+<a href="/"{{if not .RequestsPage}} aria-current="page"{{end}}>Rules</a>
 <a href="/requests"{{if .RequestsPage}} aria-current="page"{{end}}>Request log</a>
 </nav>
 {{if .RequestsPage}}
@@ -572,16 +572,16 @@ button:focus-visible {
 <h2 id="request-log-heading">Recent requests</h2>
 <p>Latest 200 completed requests · newest first</p>
 </header>
-<div class="listener">
+<div class="rule">
 {{if .Requests}}
 <div class="table-wrap">
 <table class="request-table">
-<thead><tr><th>Time</th><th>Listener</th><th>Backend</th><th>Method</th><th>Path</th><th>Status</th><th>Duration</th></tr></thead>
+<thead><tr><th>Time</th><th>Rule</th><th>Backend</th><th>Method</th><th>Path</th><th>Status</th><th>Duration</th></tr></thead>
 <tbody>
 {{range .Requests}}
 <tr>
 <td data-label="Time"><time>{{.Time}}</time></td>
-<td data-label="Listener">{{.Listener}}</td>
+<td data-label="Rule">{{.Rule}}</td>
 <td data-label="Backend"><code>{{.Backend}}</code></td>
 <td data-label="Method"><code>{{.Method}}</code></td>
 <td data-label="Path"><code>{{.Path}}</code></td>
@@ -598,17 +598,17 @@ button:focus-visible {
 </div>
 </section>
 {{else}}
-<div class="listeners">
+<div class="rules">
 {{$csrf := .CSRFToken}}
-{{range .Listeners}}
-{{$listener := .Name}}
-<section class="listener">
-<header class="listener-header">
+{{range .Rules}}
+{{$rule := .Name}}
+<section class="rule">
+<header class="rule-header">
 <div>
 <h2>{{.Name}}</h2>
 <p class="address">{{if .Hosts}}{{.Hosts}}{{else}}{{.Address}}{{end}}</p>
 </div>
-<span class="listener-state {{if .Listening}}is-listening{{end}}">{{if .Listening}}listening{{else}}not listening{{end}}</span>
+<span class="rule-state {{if .Listening}}is-listening{{end}}">{{if .Listening}}listening{{else}}not listening{{end}}</span>
 </header>
 <div class="table-wrap">
 <table>
@@ -622,7 +622,7 @@ button:focus-visible {
 <td data-label="Action">{{if and .Available (not .Active)}}
 <form method="post" action="/switch">
 <input type="hidden" name="csrf_token" value="{{$csrf}}">
-<input type="hidden" name="listener" value="{{$listener}}">
+<input type="hidden" name="rule" value="{{$rule}}">
 <input type="hidden" name="backend" value="{{.Index}}">
 <button type="submit">Switch</button>
 </form>

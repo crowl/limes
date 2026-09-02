@@ -1,19 +1,14 @@
 package app
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crowl/limes/internal/buildinfo"
 	"github.com/crowl/limes/internal/config"
@@ -51,203 +46,17 @@ func TestRunPrintsVersionWithoutLoadingConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if bindCalled {
-		t.Fatal("listeners were bound for version output")
+		t.Fatal("proxy was bound for version output")
 	}
 	if got, want := output.String(), "limes v1.2.3 (a1b2c3d)\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
 
-func TestRunKeepsAdminAvailableWhenAllBackendsAreUnavailable(t *testing.T) {
-	adminListener := mustListen(t)
-	adminAddress := adminListener.Addr().String()
-	if err := adminListener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "config.json")
-	contents := `{"admin":{"address":"` + adminAddress + `"},"listeners":[{"name":"unavailable","address":"127.0.0.1:8787","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"MISSING","header":"Authorization"}}]}]}`
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	bindCalled := false
-	err := runWithBind(ctx, []string{"--config-path", path}, func(string) string { return "" }, testLogger(), io.Discard, io.Discard, func(providers []provider) ([]runningProvider, error) {
-		bindCalled = true
-		if len(providers) != 0 {
-			t.Fatalf("bound providers = %#v", providers)
-		}
-		return nil, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bindCalled {
-		t.Fatal("proxy binding was not attempted")
-	}
-}
-
-func TestRunValidatesAllBackendsBeforeBinding(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	contents := `{"listeners":[` +
-		`{"name":"available","address":"127.0.0.1:1","backends":[{"type":"http","upstreams":["http://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]},` +
-		`{"name":"invalid","address":"127.0.0.1:2","backends":[{"type":"http","upstreams":["https://example.test:99999"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}` +
-		`]}`
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	bindCalled := false
-	err := runWithBind(context.Background(), []string{"--config-path", path}, func(name string) string {
-		if name == "KEY" {
-			return "credential"
-		}
-		return ""
-	}, testLogger(), io.Discard, io.Discard, func([]provider) ([]runningProvider, error) {
-		bindCalled = true
-		t.Fatal("bind was called before invalid configuration was rejected")
-		return nil, nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "invalid explicit port") {
-		t.Fatalf("runWithBind() error = %v", err)
-	}
-	if bindCalled {
-		t.Fatal("bind was called before invalid configuration was rejected")
-	}
-}
-
-func TestSelectProvidersPrefersAvailableAnthropicSubscription(t *testing.T) {
-	directory := t.TempDir()
-	expiresAt := time.Now().Add(time.Hour).UnixMilli()
-	contents := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"token","refreshToken":"refresh","expiresAt":%d,"scopes":["user:inference"]}}`, expiresAt)
-	if err := os.WriteFile(filepath.Join(directory, ".credentials.json"), []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	settings := config.File{Listeners: []config.Listener{{Name: "anthropic", Address: "127.0.0.1:0", Backends: []config.Backend{
-		{Type: "anthropic_subscription"}, httpBackend("KEY"),
-	}}}}
-	providers, err := selectProviders(settings, func(name string) string {
-		if name == "CLAUDE_CONFIG_DIR" {
-			return directory
-		}
-		if name == "KEY" {
-			return "fallback"
-		}
-		return ""
-	}, testLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(providers) != 1 || providers[0].authMode != "anthropic_subscription" || providers[0].name != "anthropic" {
-		t.Fatalf("selected providers = %#v", providers)
-	}
-}
-
-func TestSelectProvidersPrefersAvailableSubscription(t *testing.T) {
-	directory := t.TempDir()
-	contents := `{"tokens":{"access_token":"` + subscriptionTestJWT("account") + `"},"last_refresh":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
-	if err := os.WriteFile(filepath.Join(directory, "auth.json"), []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	settings := config.File{Listeners: []config.Listener{{Name: "any", Address: "127.0.0.1:0", Backends: []config.Backend{
-		{Type: "openai_subscription"}, httpBackend("KEY"),
-	}}}}
-	providers, err := selectProviders(settings, func(name string) string {
-		if name == "CODEX_HOME" {
-			return directory
-		}
-		if name == "KEY" {
-			return "fallback"
-		}
-		return ""
-	}, testLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(providers) != 1 || providers[0].authMode != "openai_subscription" || providers[0].name != "any" {
-		t.Fatalf("selected providers = %#v", providers)
-	}
-}
-
-func TestSelectProvidersPrefersAvailableXaiSubscription(t *testing.T) {
-	directory := t.TempDir()
-	entry := `{"key":"token","auth_mode":"oidc","user_id":"user","expires_at":"2100-01-01T00:00:00Z","refresh_token":"refresh","oidc_issuer":"https://auth.x.ai","oidc_client_id":"b1a00492-073a-47ea-816f-4c329264a828"}`
-	contents := `{"https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828":` + entry + `}`
-	if err := os.WriteFile(filepath.Join(directory, "auth.json"), []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	settings := config.File{Listeners: []config.Listener{{Name: "xai", Address: "127.0.0.1:0", Backends: []config.Backend{
-		{Type: "xai_subscription"}, httpBackend("KEY"),
-	}}}}
-	providers, err := selectProviders(settings, func(name string) string {
-		if name == "GROK_HOME" {
-			return directory
-		}
-		if name == "KEY" {
-			return "fallback"
-		}
-		return ""
-	}, testLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(providers) != 1 || providers[0].authMode != "xai_subscription" || providers[0].name != "xai" {
-		t.Fatalf("selected providers = %#v", providers)
-	}
-}
-
-func TestSelectProvidersEvaluatesLaterBackendAfterSelection(t *testing.T) {
-	directory := t.TempDir()
-	contents := `{"tokens":{"access_token":"` + subscriptionTestJWT("account") + `"},"last_refresh":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
-	if err := os.WriteFile(filepath.Join(directory, "auth.json"), []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	settings := config.File{Listeners: []config.Listener{{Name: "one", Address: "127.0.0.1:0", Backends: []config.Backend{{Type: "openai_subscription"}, httpBackend("LATER")}}}}
-	laterEvaluated := false
-	providers, err := selectProviders(settings, func(name string) string {
-		if name == "CODEX_HOME" {
-			return directory
-		}
-		if name == "LATER" {
-			laterEvaluated = true
-			return "fallback"
-		}
-		return ""
-	}, testLogger())
-	if err != nil || len(providers) != 1 || providers[0].authMode != "openai_subscription" || !laterEvaluated {
-		t.Fatalf("selectProviders() = %#v, %v, later evaluated = %v", providers, err, laterEvaluated)
-	}
-}
-
-func TestSelectProvidersUsesHTTPAndDisablesUnavailableListener(t *testing.T) {
-	settings := config.File{Listeners: []config.Listener{
-		{Name: "disabled", Address: "127.0.0.1:1", Backends: []config.Backend{httpBackend("MISSING")}},
-		{Name: "enabled", Address: "127.0.0.1:2", Backends: []config.Backend{{Type: "openai_subscription"}, httpBackend("KEY")}},
-	}}
-	providers, err := selectProviders(settings, func(name string) string {
-		if name == "KEY" {
-			return "value"
-		}
-		return ""
-	}, testLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(providers) != 1 || providers[0].name != "enabled" || providers[0].authMode != "http" {
-		t.Fatalf("selected providers = %#v", providers)
-	}
-}
-
-func TestSelectProvidersFailsWhenAllUnavailable(t *testing.T) {
-	_, err := selectProviders(config.File{Listeners: []config.Listener{{Name: "none", Address: "127.0.0.1:1", Backends: []config.Backend{httpBackend("MISSING")}}}}, func(string) string { return "" }, testLogger())
-	if err == nil || err.Error() != "no configured listener has an available backend" {
-		t.Fatalf("selectProviders() error = %v", err)
-	}
-}
-
 func TestBindProvidersSetsRequestReadTimeout(t *testing.T) {
 	listener := mustListen(t)
 	running, err := bindProvidersWithListener(
-		[]provider{{name: "one", address: "127.0.0.1:0", handler: http.NotFoundHandler()}},
+		[]provider{{name: "proxy", address: "127.0.0.1:0", handler: http.NotFoundHandler()}},
 		func(_, _ string) (net.Listener, error) { return listener, nil },
 	)
 	if err != nil {
@@ -259,9 +68,9 @@ func TestBindProvidersSetsRequestReadTimeout(t *testing.T) {
 	}
 }
 
-func TestBindProvidersRollsBackEarlierListeners(t *testing.T) {
+func TestBindProvidersRollsBackEarlierSockets(t *testing.T) {
 	first := &recordingListener{Listener: mustListen(t)}
-	sentinel := errors.New("second listener unavailable")
+	sentinel := errors.New("second socket unavailable")
 	providers := []provider{{name: "first", address: "first", handler: http.NotFoundHandler()}, {name: "second", address: "second", handler: http.NotFoundHandler()}}
 	calls := 0
 	_, err := bindProvidersWithListener(providers, func(_, _ string) (net.Listener, error) {
@@ -282,11 +91,6 @@ func testLogger() *slog.Logger {
 
 func httpBackend(environment string) config.Backend {
 	return config.Backend{Type: "http", Upstreams: []string{"https://example.test"}, Routes: []config.Route{{Method: "POST", Path: "/x"}}, Credential: &config.Credential{Environment: environment, Header: "Authorization"}}
-}
-
-func subscriptionTestJWT(account string) string {
-	payload := `{"exp":4102444800,"https://api.openai.com/auth":{"chatgpt_account_id":"` + account + `"}}`
-	return "x." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".x"
 }
 
 func mustListen(t *testing.T) net.Listener {

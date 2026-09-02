@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestLoadAcceptsProxyWithoutListeners(t *testing.T) {
+func TestLoadAcceptsProxy(t *testing.T) {
 	file, err := Load(writeConfig(t, `{"proxy":{"address":"0.0.0.0:8800","rules":[`+validRule("openai")+`]}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -16,9 +16,6 @@ func TestLoadAcceptsProxyWithoutListeners(t *testing.T) {
 	rule := file.Proxy.Rules[0]
 	if rule.Name != "openai" || len(rule.Backends) != 1 || !rule.Backends[0].Routes[0].Pattern.Matches("/v1/responses") {
 		t.Fatalf("rule = %#v", rule)
-	}
-	if len(file.Listeners) != 0 {
-		t.Fatalf("listeners = %#v", file.Listeners)
 	}
 }
 
@@ -54,9 +51,7 @@ func TestLoadRejectsInvalidProxy(t *testing.T) {
 		{"invalid backend", `{"proxy":{"address":"0.0.0.0:8800","rules":[{"name":"openai","backends":[{"type":"other"}]}]}}`, "unknown backend type"},
 		{"foreign backend field", `{"proxy":{"address":"0.0.0.0:8800","rules":[{"name":"openai","backends":[{"type":"openai_subscription","upstreams":["https://x"]}]}]}}`, "does not belong"},
 		{"unknown rule field", `{"proxy":{"address":"0.0.0.0:8800","rules":[{"name":"openai","unknown":true,"backends":[]}]}}`, "unknown field"},
-		{"collides with listener", `{"proxy":{"address":"127.0.0.1:1","rules":[` + validRule("openai") + `]},"listeners":[` + validListener("one", "127.0.0.1:1") + `]}`, "duplicate listener address"},
-		{"collides with admin", `{"admin":{"address":"127.0.0.1:8799"},"proxy":{"address":"127.0.0.1:8799","rules":[` + validRule("openai") + `]}}`, "duplicate listener address"},
-		{"rule name collides with listener", `{"proxy":{"address":"127.0.0.1:2","rules":[` + validRule("one") + `]},"listeners":[` + validListener("one", "127.0.0.1:1") + `]}`, "duplicate listener name"},
+		{"collides with admin", `{"admin":{"address":"127.0.0.1:8799"},"proxy":{"address":"127.0.0.1:8799","rules":[` + validRule("openai") + `]}}`, "conflicts with admin"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, testCase.body))

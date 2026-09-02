@@ -56,7 +56,7 @@ func TestParseResolvesEnvironmentPathsWithoutProcessEnvironment(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsRoutePatternAndZeroListenerPort(t *testing.T) {
+func TestLoadRejectsRoutePatternAndZeroProxyPort(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
 		document string
@@ -64,11 +64,11 @@ func TestLoadRejectsRoutePatternAndZeroListenerPort(t *testing.T) {
 	}{
 		{
 			name: "route pattern is not configuration", want: "unknown field",
-			document: `{"listeners":[{"name":"one","address":"127.0.0.1:1","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x","Pattern":{}}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`,
+			document: `{"proxy":{"address":"127.0.0.1:1","rules":[{"name":"one","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x","Pattern":{}}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}}`,
 		},
 		{
-			name: "zero listener port", want: "invalid port",
-			document: `{"listeners":[{"name":"one","address":"127.0.0.1:0","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}`,
+			name: "zero proxy port", want: "invalid port",
+			document: `{"proxy":{"address":"127.0.0.1:0","rules":[{"name":"one","backends":[{"type":"http","upstreams":["https://example.test"],"routes":[{"method":"POST","path":"/x"}],"credential":{"environment":"KEY","header":"Authorization"}}]}]}}`,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

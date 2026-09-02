@@ -47,7 +47,7 @@ func TestRequestLogCapturesSafeCompletedRequestMetadata(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 	got := entries[0]
-	if got.Listener != "api" || got.Backend != "http" || got.Method != http.MethodPost || got.Path != "/v1/items" || got.Status != http.StatusCreated || got.Duration != 25*time.Millisecond {
+	if got.Rule != "api" || got.Backend != "http" || got.Method != http.MethodPost || got.Path != "/v1/items" || got.Status != http.StatusCreated || got.Duration != 25*time.Millisecond {
 		t.Fatalf("entry = %#v", got)
 	}
 
