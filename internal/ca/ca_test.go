@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLifecycleAndLeafCertificates(t *testing.T) {
@@ -73,6 +74,47 @@ func TestLifecycleAndLeafCertificates(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "BEGIN CERTIFICATE") || strings.Contains(output.String(), "PRIVATE KEY") {
 		t.Fatalf("certificate output = %q", output.String())
+	}
+}
+
+func TestCertificateRenewsCachedLeafBeforeExpiration(t *testing.T) {
+	home := t.TempDir()
+	getenv := func(name string) string {
+		if name == "HOME" {
+			return home
+		}
+		return ""
+	}
+	if err := Run([]string{"init"}, getenv, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := Load(getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := authority.Certificate("api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := authority.Certificate("api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached != first {
+		t.Fatal("valid leaf certificate was not reused")
+	}
+
+	first.Leaf.NotAfter = time.Now().Add(leafRenewalMargin - time.Second)
+	renewed, err := authority.Certificate("api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed == first {
+		t.Fatal("leaf certificate near expiration was reused")
+	}
+	if !renewed.Leaf.NotAfter.After(first.Leaf.NotAfter) {
+		t.Fatalf("renewed leaf expires at %s; previous leaf expires at %s", renewed.Leaf.NotAfter, first.Leaf.NotAfter)
 	}
 }
 

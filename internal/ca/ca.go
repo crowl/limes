@@ -27,6 +27,8 @@ import (
 const (
 	certificateFilename = "ca-cert.pem"
 	privateKeyFilename  = "ca-key.pem"
+	leafValidity        = 24 * time.Hour
+	leafRenewalMargin   = 5 * time.Minute
 )
 
 // Authority is a loaded Limes certificate authority. It issues short-lived
@@ -152,7 +154,8 @@ func (authority *Authority) Certificate(host string) (*tls.Certificate, error) {
 
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
-	if certificate := authority.leafs[host]; certificate != nil {
+	now := time.Now()
+	if certificate := authority.leafs[host]; certificate != nil && certificate.Leaf != nil && now.Add(leafRenewalMargin).Before(certificate.Leaf.NotAfter) {
 		return certificate, nil
 	}
 
@@ -164,8 +167,7 @@ func (authority *Authority) Certificate(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	notAfter := now.Add(24 * time.Hour)
+	notAfter := now.Add(leafValidity)
 	if notAfter.After(authority.certificate.NotAfter) {
 		notAfter = authority.certificate.NotAfter
 	}
@@ -189,9 +191,14 @@ func (authority *Authority) Certificate(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create leaf certificate: %w", err)
 	}
+	leaf, err := x509.ParseCertificate(certificateDER)
+	if err != nil {
+		return nil, fmt.Errorf("parse created leaf certificate: %w", err)
+	}
 	certificate := &tls.Certificate{
 		Certificate: [][]byte{certificateDER, authority.certificate.Raw},
 		PrivateKey:  privateKey,
+		Leaf:        leaf,
 	}
 	authority.leafs[host] = certificate
 	return certificate, nil
