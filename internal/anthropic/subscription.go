@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,12 +78,7 @@ func tokenNeedsRefresh(credential oauthCredential, now time.Time) bool {
 }
 
 func hasScope(scopes []string, wanted string) bool {
-	for _, scope := range scopes {
-		if scope == wanted {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(scopes, wanted)
 }
 
 func newSubscriptionCredentials(store credentialStore, file *credentialFile) *subscriptionCredentials {

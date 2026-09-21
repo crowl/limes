@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 )
@@ -60,9 +61,7 @@ func (store authStore) read(path string) (*authFile, error) {
 
 func (store authStore) write(path string, file *authFile) error {
 	fields := make(map[string]json.RawMessage, len(file.fields)+2)
-	for name, value := range file.fields {
-		fields[name] = value
-	}
+	maps.Copy(fields, file.fields)
 
 	tokens, err := json.Marshal(file.Tokens)
 	if err != nil {

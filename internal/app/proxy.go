@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -141,13 +142,7 @@ func upstreamHostname(value string) (string, error) {
 
 func appendMissing(existing, candidates []string) []string {
 	for _, candidate := range candidates {
-		found := false
-		for _, host := range existing {
-			if host == candidate {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(existing, candidate)
 		if !found {
 			existing = append(existing, candidate)
 		}
