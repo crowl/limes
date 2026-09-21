@@ -95,6 +95,25 @@
         ]
       },
       {
+        "name": "typesafe",
+        "backends": [
+          {
+            "type": "http",
+            "upstreams": ["https://api.typesafe.ai"],
+            "routes": [
+              { "method": "POST", "path": "/v1/systemone" },
+              { "method": "GET", "path": "/v1/models" }
+            ],
+            "remove_headers": ["Authorization"],
+            "credential": {
+              "environment": "TYPESAFE_API_KEY",
+              "header": "Authorization",
+              "prefix": "Bearer "
+            }
+          }
+        ]
+      },
+      {
         "name": "github",
         "backends": [
           {

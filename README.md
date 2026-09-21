@@ -89,8 +89,8 @@ Destinations not claimed by a rule are relayed unchanged by default. Set
 refuses to relay to loopback, private, link-local, and multicast addresses.
 
 See [`config.example.json`](config.example.json) for OpenAI, Anthropic, xAI,
-Gemini, and GitHub examples, and [Configuration](docs/configuration.md) for the
-complete reference.
+Gemini, TypeSafe, and GitHub examples, and
+[Configuration](docs/configuration.md) for the complete reference.
 
 ## Subscription backends
 
